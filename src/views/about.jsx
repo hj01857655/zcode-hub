@@ -22,19 +22,28 @@ function Feature({ title, desc }) {
 // 发现新版本后下载并安装，Windows 下安装器自行接管重启，relaunch 兜底其余平台
 const UP_IDLE = { st: "idle", ver: "", pct: 0, err: "" };
 
+// 上次检查时间的本地存储键（无需后端：检查是本页发起的纯前端行为）
+const LAST_CHECK_KEY = "about.lastUpdateCheck";
+
 export default function AboutPage() {
   useSyncExternalStore(subscribe, getVersion);
   const [appVer, setAppVer] = useState("");
   const [up, setUp] = useState(UP_IDLE);
+  const [lastCheck, setLastCheck] = useState(() => localStorage.getItem(LAST_CHECK_KEY) || "");
   const upRef = useRef(null);
   useEffect(() => {
     invoke("app_version").then((v) => setAppVer(v || "")).catch(() => setAppVer("-"));
   }, []);
 
   async function runCheck() {
+    // 连点防护：checking/downloading 中再点直接忽略（st 是同步状态，setState 异步不依赖它）
+    if (up.st === "checking" || up.st === "downloading") return;
     setUp({ ...UP_IDLE, st: "checking" });
+    const at = new Date().toISOString();
     try {
       const u = await check();
+      localStorage.setItem(LAST_CHECK_KEY, at);
+      setLastCheck(at);
       if (!u) { setUp({ ...UP_IDLE, st: "latest" }); return; }
       upRef.current = u;
       setUp({ ...UP_IDLE, st: "available", ver: u.version });
@@ -44,6 +53,7 @@ export default function AboutPage() {
   }
 
   async function doInstall() {
+    if (up.st !== "available") return;
     setUp((s) => ({ ...s, st: "downloading", pct: 0 }));
     try {
       let received = 0;
@@ -67,20 +77,39 @@ export default function AboutPage() {
     }
   }
 
+  // 相对时间（几分钟前/几小时前/几天前），避免时区换算噪音
+  const lastCheckText = (() => {
+    if (!lastCheck) return "";
+    const ms = Date.now() - new Date(lastCheck).getTime();
+    if (ms < 60_000) return t("a.lastCheckJust");
+    if (ms < 3_600_000) return t("a.lastCheckMin", { n: Math.floor(ms / 60_000) });
+    if (ms < 86_400_000) return t("a.lastCheckHour", { n: Math.floor(ms / 3_600_000) });
+    return t("a.lastCheckDay", { n: Math.floor(ms / 86_400_000) });
+  })();
+
   const updRow =
     up.st === "idle" ? (
-      <button type="button" className="btn-ghost" onClick={runCheck}>{t("a.updCheck")}</button>
+      <>
+        <button type="button" className="btn-ghost" onClick={runCheck}>{t("a.updCheck")}</button>
+        {lastCheckText && <span className="about-upd-hint">{t("a.lastCheck", { at: lastCheckText })}</span>}
+      </>
     ) : up.st === "checking" ? (
       <span className="about-upd-hint">{t("a.updChecking")}</span>
     ) : up.st === "latest" ? (
-      <span className="about-upd-hint">{t("a.updLatest")}</span>
+      <>
+        <span className="about-upd-hint">{t("a.updLatest")}</span>
+        <span className="about-upd-hint">{t("a.lastCheck", { at: lastCheckText })}</span>
+      </>
     ) : up.st === "available" ? (
       <>
         <span className="about-upd-hint">{t("a.updAvailable", { ver: up.ver })}</span>
         <button type="button" className="btn-ghost" onClick={doInstall}>{t("a.updInstall")}</button>
       </>
     ) : up.st === "downloading" ? (
-      <span className="about-upd-hint">{t("a.updDownloading")} {up.pct}%</span>
+      <div className="about-dl">
+        <div className="about-dl-bar"><div className="about-dl-fill" style={{ width: `${up.pct}%` }} /></div>
+        <span className="about-upd-hint">{t("a.updDownloading")} {up.pct}%</span>
+      </div>
     ) : (
       <>
         {/* 展示映射后的短句，原始 Rust 错误挂 title 供排查 */}
@@ -95,7 +124,7 @@ export default function AboutPage() {
         <div className="about-brand">
           <span className="about-mark">Z·SWITCH</span>
           {appVer === ""
-            ? <span className="about-ver">…</span>
+            ? <span className="about-ver-skel" aria-label={t("a.verLabel")} />
             : appVer !== "-" && <span className="about-ver">v{appVer}</span>}
           <span className="about-tagline">{t("a.tagline")}</span>
         </div>

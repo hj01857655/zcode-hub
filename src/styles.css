@@ -519,22 +519,31 @@ input:focus-visible,
   padding: 6px 20px 20px;
   flex: 1;
   width: 100%;
-  max-width: 760px;
+  max-width: 1080px;
   margin: 0 auto;
+  /* 宽窗口双列网格铺开，矮卡配高卡；窄窗口（嵌入侧栏）回退单列 */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
 }
-/* 分组卡片：每张卡一个小标题 + 同类设置行，卡间留呼吸 */
+@media (max-width: 720px) {
+  .settings { grid-template-columns: 1fr; }
+}
+/* 分组卡片：每张卡一个小标题 + 同类设置行 */
 .set-card {
   background: var(--panel-2);
   border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 13px 18px 15px;
-  margin-bottom: 14px;
 }
 .set-card > label { margin-bottom: 8px; }
 .set-card .tog-row { padding: 9px 0; }
 .set-card .hint { border-top: none; padding-top: 10px; margin-top: 10px; }
 .set-card .path-line { margin-top: 10px; }
 .set-card .lib-row { margin-top: 6px; }
+/* 尾卡（ZCode 路径，带长 hint）跨双列收尾，避免双列自动流孤行 */
+.set-card:last-child { grid-column: 1 / -1; }
 .settings label {
   display: block;
   font-family: var(--mono);
