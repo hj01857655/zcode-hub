@@ -246,7 +246,7 @@ export const zh = {
   "x.protoAnthropic": "Anthropic Messages 兼容（流式透传 / 非流式）",
   "x.protoResponses": "OpenAI Responses 兼容（非流式）",
   "x.protoModels": "模型列表（动态聚合）",
-  "a.tagline": "ZCode 多账号切换器",
+  "a.tagline": "ZCode 多账号工作台 · 切换 / 额度 / 领取 / 网关",
   "a.verLabel": "版本",
   "a.featLabel": "功能",
   "a.feat1t": "多账号切换",

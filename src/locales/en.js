@@ -245,7 +245,7 @@ export const en = {
   "x.protoAnthropic": "Anthropic Messages compatible (SSE passthrough / non-streaming)",
   "x.protoResponses": "OpenAI Responses compatible (non-streaming)",
   "x.protoModels": "Model list (dynamic aggregation)",
-  "a.tagline": "Multi-account switcher for ZCode",
+  "a.tagline": "Multi-account workbench for ZCode · switch / quota / claim / gateway",
   "a.verLabel": "Version",
   "a.featLabel": "Features",
   "a.feat1t": "Multi-account switching",
