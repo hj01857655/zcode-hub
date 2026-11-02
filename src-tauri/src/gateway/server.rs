@@ -19,6 +19,11 @@ struct SvcState {
     backoff_secs: u64,
     /// SSE keepalive 秒数（配置面；0 = 关闭）
     keepalive_secs: u64,
+    /// /v1/models 动态模型面缓存：(抓取时刻, 模型名集合)
+    models_cache: tokio::sync::RwLock<Option<(std::time::Instant, Vec<String>)>>,
+    /// per-account 模型面缓存：id → (抓取时刻, Some(模型集)=已确认 / None=拉取失败)。
+    /// pick 按模型路由用：失败负缓存 60s 内放行该号（避免网络抖动把号误踢出池）
+    models_by_acct: tokio::sync::RwLock<std::collections::HashMap<String, (std::time::Instant, Option<Vec<String>>)>>,
     /// 跨线程共享：pool 调度器 + 请求日志环 + 计数（twoapi_status 经 TwoApiState 读取）
     shared: std::sync::Arc<super::GatewayShared>,
 }
@@ -47,6 +52,8 @@ pub async fn serve(
         max_retries,
         backoff_secs,
         keepalive_secs,
+        models_cache: tokio::sync::RwLock::new(None),
+        models_by_acct: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         shared,
     });
     let app = axum::Router::new()
@@ -100,7 +107,12 @@ fn check_auth(state: &SvcState, headers: &HeaderMap) -> Result<(), StatusCode> {
     Ok(())
 }
 
-/// /v1/models：静态列表。真实模型面（按登录号 entitlements 生成）M2 接。
+/// /v1/models 缓存 TTL：entitlements 变化不频繁（领取/到期才变），5 分钟足够。
+const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// /v1/models：动态模型面——聚合池内账号 billing/balance 的 entitlements
+/// （balances[].show_name 即模型名；实测 0817 周卡号两个模型、1102 夜卡号只有 Flash，
+/// 静态表无法表达）。5 分钟缓存；全部取不到时回落 MODEL_LIST 静态表保底。
 async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
     check_auth(&state, &headers)?;
     let model = |id: &str| {
@@ -109,10 +121,142 @@ async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMa
             "permission": [], "root": id, "parent": null,
         })
     };
+    // 缓存命中直接回
+    {
+        let cache = state.models_cache.read().await;
+        if let Some((at, ids)) = cache.as_ref() {
+            if at.elapsed() < MODELS_CACHE_TTL {
+                return Ok(Json(json!({
+                    "object": "list",
+                    "data": ids.iter().map(|id| model(id)).collect::<Vec<_>>(),
+                })));
+            }
+        }
+    }
+    // 过期/未缓存：聚合池内账号 entitlements
+    let ids = refresh_model_list(&state).await;
+    if !ids.is_empty() {
+        *state.models_cache.write().await = Some((std::time::Instant::now(), ids.clone()));
+    }
+    let list: Vec<String> = if ids.is_empty() {
+        crate::gateway::MODEL_LIST.iter().map(|s| s.to_string()).collect()
+    } else {
+        ids
+    };
     Ok(Json(json!({
         "object": "list",
-        "data": crate::gateway::MODEL_LIST.iter().map(|id| model(id)).collect::<Vec<_>>(),
+        "data": list.iter().map(|id| model(id)).collect::<Vec<_>>(),
     })))
+}
+
+/// 单账号 entitlements 抓取：GET billing/balance，取 balances[].show_name 去重。
+/// 失败返回空（不连坐聚合）。
+async fn fetch_model_names(
+    http: &reqwest::Client,
+    token: &str,
+    mid: Option<String>,
+) -> Option<Vec<String>> {
+    let url = format!(
+        "{}?app_version={}",
+        crate::quota::BILLING_BALANCE_URL,
+        crate::quota::zcode_app_version()
+    );
+    let mut req = http.get(&url).timeout(std::time::Duration::from_secs(8));
+    for (k, v) in crate::quota::zai_billing_headers_with_mid(token, mid) {
+        req = req.header(k, v);
+    }
+    let Ok(resp) = req.send().await else {
+        return None;
+    };
+    let Ok(v) = resp.json::<Value>().await else {
+        return None;
+    };
+    let mut out: Vec<String> = Vec::new();
+    if let Some(balances) = v.pointer("/data/balances").and_then(Value::as_array) {
+        for b in balances {
+            if let Some(name) = b.get("show_name").and_then(Value::as_str) {
+                if !name.is_empty() && !out.iter().any(|x| x == name) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    // 成功响应（含空桶表）返回 Some——空表是「确认无任何桶」，不能和请求失败混成一种
+    Some(out)
+}
+
+/// pool_send 选号前补齐成员模型面：缓存命中直接回填，models: None 的号现拉并回写缓存。
+/// 正缓存 5 分钟；失败写负缓存（60s 内视为 None 放行该号）。
+async fn ensure_model_faces(state: &SvcState, members: &mut [pool::PoolMember]) {
+    const POS_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+    const NEG_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut to_fetch: Vec<usize> = Vec::new();
+    let mut fill: Vec<(usize, Vec<String>)> = Vec::new();
+    {
+        let cache = state.models_by_acct.read().await;
+        for (i, m) in members.iter().enumerate() {
+            if m.models.is_some() {
+                continue;
+            }
+            match cache.get(&m.id) {
+                Some((at, face)) if face.is_some() && at.elapsed() < POS_TTL => {
+                    fill.push((i, face.clone().unwrap()));
+                }
+                Some((at, face)) if face.is_none() && at.elapsed() < NEG_TTL => {}
+                _ => to_fetch.push(i),
+            }
+        }
+    }
+    for (i, face) in fill {
+        members[i].models = Some(face);
+    }
+    if to_fetch.is_empty() {
+        return;
+    }
+    let mut fetched: Vec<(usize, Option<Vec<String>>)> = Vec::new();
+    for &i in &to_fetch {
+        let m = &members[i];
+        // Some(空)=确认无桶（照实缓存，pick 永不命中该号）；None=拉取失败（负缓存按未知放行）
+        let face = fetch_model_names(&state.http, &m.token, m.mid.clone()).await;
+        members[i].models = face.clone();
+        fetched.push((i, face));
+    }
+    let mut cache = state.models_by_acct.write().await;
+    for (i, face) in fetched {
+        cache.insert(members[i].id.clone(), (std::time::Instant::now(), face));
+    }
+}
+
+/// 聚合池内全部可用账号的模型名并集；任一号失败不连坐。
+async fn refresh_model_list(state: &SvcState) -> Vec<String> {
+    let Ok(members) = super::pool::members() else {
+        return Vec::new();
+    };
+    let mut handles = Vec::new();
+    for m in members {
+        let http = state.http.clone();
+        handles.push(tokio::spawn(async move {
+            fetch_model_names(&http, &m.token, m.mid).await
+        }));
+    }
+    let mut out: Vec<String> = Vec::new();
+    for h in handles {
+        // JoinError 与拉取失败（None）都不连坐并集；Some(空) 本来就不贡献模型名
+        if let Ok(Some(names)) = h.await {
+            for name in names {
+                if !out.iter().any(|x| x == &name) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    // 聚合成功写回 GatewayShared：gateway_status（UI 模型列表）同源生效
+    if !out.is_empty() {
+        if let Ok(mut shared) = state.shared.models.lock() {
+            *shared = out.clone();
+        }
+    }
+    out
 }
 
 /// /v1/messages（M4 完整版）：入站 stream=true 时上游 SSE 原样透传（Anthropic 原生客户端
@@ -598,7 +742,7 @@ async fn pool_send(
     req_id: &str,
     sticky: pool::Sticky<'_>,
 ) -> Result<UpstreamOk, (StatusCode, Json<Value>)> {
-    let members = match tokio::task::spawn_blocking(pool::members).await {
+    let mut members = match tokio::task::spawn_blocking(pool::members).await {
         Ok(Ok(m)) => m,
         Ok(Err(e)) => return Err((StatusCode::SERVICE_UNAVAILABLE, api_error_id("api_error", &e, req_id))),
         Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, api_error_id("api_error", &e.to_string(), req_id))),
@@ -609,9 +753,22 @@ async fn pool_send(
             api_error_id("api_error", "pool: no logged-in account", req_id),
         ));
     }
+    // 模型路由：pick 前把 models: None 的号补齐模型面（models_by_acct 正缓存 5 分钟，
+    // 失败负缓存 60s，负缓存期内放行该号，避免网络抖动把号误踢出池）
+    ensure_model_faces(state, &mut members).await;
     // 初始尝试 + max_retries 次换号重放；全部失败即把最后的错误交回客户端
     for attempt in 0..=state.max_retries as usize {
-        let Some(idx) = state.shared.pool.pick(&members, sticky) else {
+        let Some(idx) = state.shared.pool.pick(&members, sticky, Some(model)) else {
+            if !pool::Pool::any_supports(&members, Some(model)) {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    api_error_id(
+                        "model_not_available",
+                        &format!("no account in pool supports model {model}"),
+                        req_id,
+                    ),
+                ));
+            }
             let wait = state.shared.pool.global_backoff_secs().max(1);
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,

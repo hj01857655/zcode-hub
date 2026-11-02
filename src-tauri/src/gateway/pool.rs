@@ -26,6 +26,10 @@ pub struct PoolMember {
     pub name: String,
     pub token: String,
     pub mid: Option<String>,
+    /// 该号当前可用的模型名（小写）。None = 模型面未知（balance 拉取失败/尚未拉到），
+    /// pick 时按万能号放行；Some(空) = 确认无任何模型桶，任何模型请求都不命中。
+    /// 实测套餐间模型面不同：周卡含 GLM-5.3 + GLM-5.3-Flash，夜卡仅 GLM-5.3-Flash。
+    pub models: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -101,7 +105,7 @@ impl Pool {
     /// 选下一个可用号：跳过冷却中 / 在飞超限的成员，成功后 cursor 粘在被选号。
     /// 带 session：优先命中 pin 表里的号（可缓存亲和，独立于全局粘性开关），pin 失效才走游标。
     /// 返回 None = 全局退避中，或全员不可用（用 global_backoff_secs 区分）。
-    pub fn pick(&self, members: &[PoolMember], sticky: Sticky<'_>) -> Option<usize> {
+    pub fn pick(&self, members: &[PoolMember], sticky: Sticky<'_>, model: Option<&str>) -> Option<usize> {
         let mut inner = self.0.lock().ok()?;
         Self::sweep(&mut inner);
         if inner.global_until.is_some() {
@@ -120,6 +124,7 @@ impl Pool {
                     let m = &members[idx];
                     if !inner.cool.contains_key(&m.id)
                         && inner.inflight.get(&m.id).copied().unwrap_or(0) < MAX_INFLIGHT
+                        && Self::supports(m, model)
                     {
                         *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
                         return Some(idx);
@@ -136,6 +141,9 @@ impl Pool {
             if inner.inflight.get(&m.id).copied().unwrap_or(0) >= MAX_INFLIGHT {
                 continue;
             }
+            if !Self::supports(m, model) {
+                continue;
+            }
             *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
             inner.cursor = idx;
             // 新选中的号记为该会话的 pin（settle 失败时解除）
@@ -145,6 +153,20 @@ impl Pool {
             return Some(idx);
         }
         None
+    }
+
+    /// 模型路由判定：Some(集合) 必须包含请求模型（大小写不敏感）；None = 模型面未知按万能号放行。
+    /// 实测套餐间模型面不同：周卡含 GLM-5.3 + GLM-5.3-Flash，夜卡仅 GLM-5.3-Flash。
+    pub fn supports(m: &PoolMember, model: Option<&str>) -> bool {
+        match (&m.models, model) {
+            (Some(list), Some(req)) => list.iter().any(|x| x.eq_ignore_ascii_case(req)),
+            _ => true,
+        }
+    }
+
+    /// 池内是否还有号支持该模型（pick 返回 None 时区分「全员冷却」与「模型没人有」）
+    pub fn any_supports(members: &[PoolMember], model: Option<&str>) -> bool {
+        members.iter().any(|m| Self::supports(m, model))
     }
 
     /// 请求收尾：在飞 -1；失败时游标挪到下一号并按档落冷却、解除该会话 pin；
@@ -284,6 +306,9 @@ pub fn members() -> Result<Vec<PoolMember>, String> {
             name: a.name,
             token,
             mid,
+            // 模型面由 /v1/models 动态聚合（server.rs fetch_model_names）现拉，
+            // members() 保持同步快路径——balance 请求是网络 IO，不能在这做
+            models: None,
         });
     }
     Ok(out)
@@ -295,8 +320,8 @@ mod tests {
 
     fn members2() -> Vec<PoolMember> {
         vec![
-            PoolMember { id: "a".into(), name: "A".into(), token: "t".into(), mid: None },
-            PoolMember { id: "b".into(), name: "B".into(), token: "t".into(), mid: None },
+            PoolMember { id: "a".into(), name: "A".into(), token: "t".into(), mid: None, models: None },
+            PoolMember { id: "b".into(), name: "B".into(), token: "t".into(), mid: None, models: None },
         ]
     }
 
@@ -305,18 +330,18 @@ mod tests {
         let m = members2();
         let pool = Pool::new();
         // 粘性：成功后驻留同号
-        let i = pool.pick(&m, Sticky::None).unwrap();
+        let i = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[i].id, i, m.len(), true, 0, Sticky::None);
-        assert_eq!(pool.pick(&m, Sticky::None).unwrap(), i);
+        assert_eq!(pool.pick(&m, Sticky::None, None).unwrap(), i);
         // 轮换：成功也让游标前移
         pool.set_sticky(false);
-        let i = pool.pick(&m, Sticky::None).unwrap();
+        let i = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[i].id, i, m.len(), true, 0, Sticky::None);
-        assert_eq!(pool.pick(&m, Sticky::None).unwrap(), (i + 1) % m.len());
+        assert_eq!(pool.pick(&m, Sticky::None, None).unwrap(), (i + 1) % m.len());
         // 失败永远换号 + 落冷却
-        let i = pool.pick(&m, Sticky::None).unwrap();
+        let i = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[i].id, i, m.len(), false, 60, Sticky::None);
-        let j = pool.pick(&m, Sticky::None).unwrap();
+        let j = pool.pick(&m, Sticky::None, None).unwrap();
         assert_ne!(j, i);
         assert!(pool.snapshot(&m)["members"][i]["cooldown_secs"].as_u64().unwrap() > 0);
     }
@@ -327,21 +352,21 @@ mod tests {
         let pool = Pool::new();
         // 轮换模式（全局粘性关）：无 session 的 pick 逐号分摊……
         pool.set_sticky(false);
-        let a = pool.pick(&m, Sticky::None).unwrap();
+        let a = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[a].id, a, m.len(), true, 0, Sticky::None);
         // ……但带 session 的请求仍钉在同一号（会话亲和独立于全局游标）
-        let s = pool.pick(&m, Sticky::Session("S1")).unwrap();
+        let s = pool.pick(&m, Sticky::Session("S1"), None).unwrap();
         pool.settle(&m[s].id, s, m.len(), true, 0, Sticky::Session("S1"));
-        assert_eq!(pool.pick(&m, Sticky::Session("S1")).unwrap(), s);
+        assert_eq!(pool.pick(&m, Sticky::Session("S1"), None).unwrap(), s);
         // 失败解钉 + 号落冷却：同 session 下次换到别的号
         pool.settle(&m[s].id, s, m.len(), false, 60, Sticky::Session("S1"));
-        let j = pool.pick(&m, Sticky::Session("S1")).unwrap();
+        let j = pool.pick(&m, Sticky::Session("S1"), None).unwrap();
         assert_ne!(j, s);
         // 粘性模式（开关开）：session pin 与全局游标都驻留
         pool.set_sticky(true);
-        let k = pool.pick(&m, Sticky::Session("S2")).unwrap();
+        let k = pool.pick(&m, Sticky::Session("S2"), None).unwrap();
         pool.settle(&m[k].id, k, m.len(), true, 0, Sticky::Session("S2"));
-        assert_eq!(pool.pick(&m, Sticky::Session("S2")).unwrap(), k);
+        assert_eq!(pool.pick(&m, Sticky::Session("S2"), None).unwrap(), k);
     }
 
     #[test]
@@ -349,22 +374,42 @@ mod tests {
         let m = members2();
         let pool = Pool::new();
         // a 先失败一次（游标挪到 b），b 再失败落长冷却退出池，此后 pick 恒选 a
-        let i0 = pool.pick(&m, Sticky::None).unwrap();
+        let i0 = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[i0].id, i0, m.len(), false, 0, Sticky::None);
-        let ib = pool.pick(&m, Sticky::None).unwrap();
+        let ib = pool.pick(&m, Sticky::None, None).unwrap();
         assert_eq!(ib, 1);
         pool.settle(&m[ib].id, ib, m.len(), false, 3600, Sticky::None);
         // 慢性失败：单次冷却 0 压不住，连续失败攒窗口；9/10 未满窗不触发（a 窗口已含开头那次）
         for _ in 0..8 {
-            let i = pool.pick(&m, Sticky::None).unwrap();
+            let i = pool.pick(&m, Sticky::None, None).unwrap();
             assert_eq!(i, 0);
             pool.settle(&m[i].id, i, m.len(), false, 0, Sticky::None);
             assert_eq!(pool.snapshot(&m)["members"][0]["cooldown_secs"].as_u64().unwrap(), 0);
         }
         // 第 10 次失败满窗（100% 错误率）→ 熔断长冷却，pick 无号可用
-        let i = pool.pick(&m, Sticky::None).unwrap();
+        let i = pool.pick(&m, Sticky::None, None).unwrap();
         pool.settle(&m[i].id, i, m.len(), false, 0, Sticky::None);
         assert!(pool.snapshot(&m)["members"][0]["cooldown_secs"].as_u64().unwrap() >= 599);
-        assert!(pool.pick(&m, Sticky::None).is_none());
+        assert!(pool.pick(&m, Sticky::None, None).is_none());
+    }
+
+    #[test]
+    fn model_routing_filters_unsupported_members() {
+        // 周卡：5.3 + flash；夜卡：仅 flash（实测模型面）。请求 5.3 只能命中周卡号
+        let mut m = members2();
+        m[0].models = Some(vec!["glm-5.3".into(), "glm-5.3-flash".into()]);
+        m[1].models = Some(vec!["glm-5.3-flash".into()]);
+        let pool = Pool::new();
+        assert!(Pool::supports(&m[0], Some("GLM-5.3")));
+        assert!(!Pool::supports(&m[1], Some("GLM-5.3")));
+        // 模型面未知（None）按万能号放行
+        assert!(Pool::supports(&PoolMember { id: "x".into(), name: "X".into(), token: "t".into(), mid: None, models: None }, Some("GLM-5.3")));
+        for _ in 0..3 {
+            let i = pool.pick(&m, Sticky::None, Some("glm-5.3")).unwrap();
+            assert_eq!(i, 0, "5.3 只在 0 号");
+            pool.settle(&m[i].id, i, m.len(), true, 0, Sticky::None);
+        }
+        assert!(pool.pick(&m, Sticky::None, Some("glm-5.3-flash")).is_some());
+        assert!(Pool::any_supports(&m, Some("glm-5.3")));
     }
 }

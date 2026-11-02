@@ -1526,8 +1526,9 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         // M5 扩展：池快照 + 请求日志环
         "pool": snapshot,
         "logs": state.shared.logs(),
-        // 模型表与 /v1/models 同源（gateway::MODEL_LIST）
-        "models": gateway::MODEL_LIST,
+        // 模型表与 /v1/models 同源：动态模型面（聚合成功后 shared.models 被覆盖），
+        // 未聚合时回落静态 MODEL_LIST 初始值
+        "models": state.shared.model_list(),
         // 配置面回显（调优输入框的初值）
         "upstreamConnectSecs": cfg.upstream_connect_secs,
         "maxRetries": cfg.max_retries,

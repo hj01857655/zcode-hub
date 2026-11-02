@@ -15,7 +15,7 @@
 | `POST /v1/chat/completions` | OpenAI Chat Completions（经典） | chat → anthropic，回包反向 | data: chunks，含 `data: [DONE]` |
 | `POST /v1/responses` | OpenAI Responses API（新） | `input`/`instructions`/`max_output_tokens` → anthropic | events 形态 |
 | `POST /v1/messages` | Anthropic Messages（原生） | 直通（仅 system 前缀注入 + 参数钳制） | `event:`/`data:` 双行 |
-| `GET /v1/models` | OpenAI Models | 静态列表 | — |
+| `GET /v1/models` | OpenAI Models | 静态列表：`GLM-5.3-Flash`、`GLM-5.3`（与套餐 entitlements.capabilities 一致） | — |
 | `GET /health` | — | — | — |
 
 Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）、`responses.go`（489 行，`BuildAnthropicFromResponses`）、`translate.go`（529 行，双向转换核心）。

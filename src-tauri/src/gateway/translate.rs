@@ -24,7 +24,6 @@ pub fn map_model(name: &str) -> String {
     match name.trim().to_lowercase().as_str() {
         "glm-5.3" => "GLM-5.3".into(),
         "glm-5.3-flash" => "GLM-5.3-Flash".into(),
-        "glm-4.7" => "GLM-4.7".into(),
         _ => "GLM-5.3-Flash".into(),
     }
 }

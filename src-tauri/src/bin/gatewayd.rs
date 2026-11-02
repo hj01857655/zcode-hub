@@ -19,6 +19,12 @@ fn main() {
     let shared = std::sync::Arc::new(zcode_switch_lib::gateway::GatewayShared {
         log: std::sync::Mutex::new(Vec::new()),
         pool: zcode_switch_lib::gateway::pool::Pool::new(),
+        models: std::sync::Mutex::new(
+            zcode_switch_lib::gateway::MODEL_LIST
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        ),
     });
     // sender 必须活到 block_on 返回：全部掉线会立即触发 graceful shutdown（实测进程秒退）
     let (tx, rx) = tokio::sync::watch::channel(false);

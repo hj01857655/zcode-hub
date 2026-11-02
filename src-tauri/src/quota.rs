@@ -503,7 +503,6 @@ fn query_with_token_via(token: &str, fetch: &FetchFn) -> Result<QuotaOverview, S
 fn query_with_token(token: &str, mid: Option<&str>) -> Result<QuotaOverview, String> {
     query_with_token_via(token, &|url, tok| http_get_json(url, tok, true, mid))
 }
-
 pub(crate) fn business_ok(v: &Value) -> bool {
     let code = v.get("code").and_then(|c| c.as_i64());
     let success = v.get("success").and_then(|s| s.as_bool());

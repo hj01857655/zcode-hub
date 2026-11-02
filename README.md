@@ -51,6 +51,22 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 - **额度展示**：账号行内联显示套餐额度与重置时间，多套餐分组；仪表盘页汇总总览
 - **活动领取**：可领套餐一键领取；「自动领取」开关（默认关）定时自动检测并领取，手动操作优先
 - **本地网关**：OpenAI 兼容反代，把任意 OpenAI SDK 的请求翻译成 ZCode 模型端点协议（`http://127.0.0.1:8081/v1`）；多账号池轮询 + 冷却、请求日志（原文/JSON/正文/SSE 多格式查看）、网关配置调优弹窗、冒烟测试弹窗（协议切换 / System / 参数 / 流式 / curl 预览）；详见 [docs/GATEWAY.md](docs/GATEWAY.md)
+- **网关快速接入**：
+  ```bash
+  # 查看可用模型（模型面随套餐 entitlements 同步）
+  curl http://127.0.0.1:8081/v1/models -H "Authorization: Bearer sk-..."
+
+  # OpenAI 协议调用
+  curl http://127.0.0.1:8081/v1/chat/completions \
+    -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+    -d '{"model":"GLM-5.3-Flash","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+
+  # Anthropic 协议调用（Claude Code 等原生客户端直连）
+  curl http://127.0.0.1:8081/v1/messages \
+    -H "Authorization: Bearer sk-..." -H "anthropic-version: 2023-06-01" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"GLM-5.3-Flash","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+  ```
 - **邀请计划**：绑定邀请码、我的邀请码与分享链接（复制完整链接）、邀请任务进度一览
 - **加密导入导出**：`.zsb` 捆绑包，PBKDF2(600k) + AES-256-GCM 口令加密
 - **中英双语**：设置里一键切换 中文 / English，主窗、托盘、错误提示、CLI 输出全覆盖；首次运行按系统语言自动选择

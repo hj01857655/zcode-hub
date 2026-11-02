@@ -51,6 +51,22 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 - **Quota display**: inline plan quota and reset time per account row, multi-plan grouping; a dashboard page summarizes everything
 - **Claim promotions**: one-click claim for eligible promotions; "Auto claim" toggle (off by default) checks and claims periodically — manual actions take priority
 - **Local gateway**: OpenAI-compatible reverse proxy that translates any OpenAI SDK request into the ZCode model endpoint protocol (`http://127.0.0.1:8081/v1`); multi-account pool with rotation and cooldown, request logs (raw/JSON/body/SSE views), gateway tuning modal, smoke-test modal (protocol switch / system prompt / parameters / streaming / curl preview); see [docs/GATEWAY.md](docs/GATEWAY.md)
+- **Gateway quick start**:
+  ```bash
+  # List available models (model surface follows plan entitlements)
+  curl http://127.0.0.1:8081/v1/models -H "Authorization: Bearer sk-..."
+
+  # OpenAI protocol
+  curl http://127.0.0.1:8081/v1/chat/completions \
+    -H "Authorization: Bearer sk-..." -H "Content-Type: application/json" \
+    -d '{"model":"GLM-5.3-Flash","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+
+  # Anthropic protocol (native clients like Claude Code connect directly)
+  curl http://127.0.0.1:8081/v1/messages \
+    -H "Authorization: Bearer sk-..." -H "anthropic-version: 2023-06-01" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"GLM-5.3-Flash","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+  ```
 - **Referral program**: bind an invite code, view my code with share link (copies the full URL), and track referral task progress
 - **Encrypted import / export**: `.zsb` bundle, PBKDF2(600k) + AES-256-GCM password encryption
 - **Bilingual UI (中文 / English)**: one-click switch in Settings — main window, tray, error messages and CLI output all covered; first run follows your OS language

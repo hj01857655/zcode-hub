@@ -14,8 +14,14 @@ pub struct GatewayShared {
     pub log: Mutex<Vec<serde_json::Value>>,
     /// pool 调度器：SvcState 与 twoapi_status 共用同一实例（计数/冷却/游标全局一致）
     pub pool: pool::Pool,
+    /// 动态模型面（/v1/models 聚合结果；gateway_status 同源读取）。
+    /// 初始为静态 MODEL_LIST，聚合成功后被 entitlements 并集覆盖。
+    pub models: Mutex<Vec<String>>,
 }
 impl GatewayShared {
+    pub fn model_list(&self) -> Vec<String> {
+        self.models.lock().map(|v| v.clone()).unwrap_or_default()
+    }
     pub fn push_log(&self, entry: serde_json::Value) {
         if let Ok(mut v) = self.log.lock() {
             v.push(entry.clone());
@@ -63,8 +69,9 @@ impl GatewayShared {
 }
 pub const LOG_CAP: usize = 200;
 
-/// /v1/models 对外模型表：单一来源，server.rs 路由与 gateway_status 共用
-pub const MODEL_LIST: &[&str] = &["GLM-5.3", "GLM-5.3-Flash", "glm-5.3-flash"];
+/// /v1/models 对外模型表：单一来源，server.rs 路由与 gateway_status 共用。
+/// 与套餐 entitlements.capabilities 实测一致（glm-5.3 / glm-5.3-flash，billing/balance 实测）。
+pub const MODEL_LIST: &[&str] = &["GLM-5.3-Flash", "GLM-5.3"];
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +96,7 @@ impl GatewayState {
                 // 启动时从 gateway.jsonl 读回尾部，重启不丢日志
                 log: Mutex::new(GatewayShared::load_log_file()),
                 pool: pool::Pool::new(),
+                models: Mutex::new(MODEL_LIST.iter().map(|s| s.to_string()).collect()),
             }),
         }
     }
