@@ -38,11 +38,11 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 |---|---|
 | Windows `*_x64-setup.exe` / `*_arm64-setup.exe` (NSIS) | ✅ Supported |
 | macOS `.dmg` | ✅ Supported (self-update uses the `.app.tar.gz` shipped alongside; `latest.json` lists macOS since v1.8.3, so mac installs made before that update manually once and become automatic afterwards) |
-| Linux `.AppImage` | ✅ Supported |
+| Linux `.AppImage` | ✅ Supported (replaces the AppImage file in place; the location must be writable) |
+| Linux `.deb` | ✅ Supported (a system authorization prompt appears once; installs via `dpkg`, no manual download) |
 | Windows portable `*_*_portable.exe` | ❌ Manual download required |
-| Linux `.deb` | ❌ Manual update (`apt` / reinstall the deb) |
 
-`latest.json` registers the Windows NSIS, macOS (`.app.tar.gz`) and Linux AppImage update channels, each with its x64 / ARM64 / Apple Silicon platform variants; the Windows portable exe and Linux deb are not listed — users on those forms must fetch new versions from Releases manually.
+`latest.json` registers four self-update channels — Windows NSIS, macOS (`.app.tar.gz`), Linux AppImage and Linux deb — each with its x64 / ARM64 / Apple Silicon platform variants; only the Windows portable exe is not listed, and those users must fetch new versions from Releases manually.
 
 ## Features
 

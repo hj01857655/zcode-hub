@@ -38,11 +38,11 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 |---|---|
 | Windows `*_x64-setup.exe`／`*_arm64-setup.exe`（NSIS） | ✅ 支持 |
 | macOS `.dmg` | ✅ 支持（自更新走同版本附带的 `.app.tar.gz`；自 v1.8.3 起 `latest.json` 已登记 macOS，更早的 mac 版手动装一次即转入自动更新） |
-| Linux `.AppImage` | ✅ 支持 |
+| Linux `.AppImage` | ✅ 支持（原地替换 AppImage 文件，需该位置可写） |
+| Linux `.deb` | ✅ 支持（安装时弹系统授权，输一次密码走 `dpkg`，无需手动下载） |
 | Windows 便携版 `*_*_portable.exe` | ❌ 需手动下载覆盖 |
-| Linux `.deb` | ❌ 需手动更新（`apt` / 重装 deb） |
 
-`latest.json` 登记 Windows NSIS、macOS（`.app.tar.gz`）与 Linux AppImage 三类自更新通道，各含 x64／ARM64／Apple Silicon 等平台变体；Windows 便携版与 Linux deb 不在其中，用这两种形态仍需从 Releases 手动取新版。
+`latest.json` 登记 Windows NSIS、macOS（`.app.tar.gz`）、Linux AppImage 与 Linux deb 四类自更新通道，各含 x64／ARM64／Apple Silicon 等平台变体；仅 Windows 便携版不在其中，便携版用户仍需从 Releases 手动取新版。
 
 ## 功能
 
