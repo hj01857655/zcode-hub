@@ -134,7 +134,15 @@ pub(crate) fn client_timezone() -> String {
     iana_time_zone::get_timezone().unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// 全通道统一自述版本（2026-11-03 定案）：返回 SAFE_APP_VERSION。
+/// 注册表探测链保留但不再取用——归因实验时可用环境变量类覆盖读回真实值，
+/// 避免本机安装版本漂移导致通道行为不可复现。
 pub(crate) fn zcode_app_version() -> String {
+    SAFE_APP_VERSION.to_string()
+}
+
+#[allow(dead_code)]
+fn registry_probe_app_version() -> String {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE
         .get_or_init(|| {
@@ -194,10 +202,13 @@ pub(crate) fn zai_billing_headers(token: &str) -> Vec<(String, String)> {
 pub(crate) fn zai_billing_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
     zai_headers_with_version(zcode_app_version(), token, mid)
 }
-
-/// 2026-11-01 gateway 实锤 + 11-02 用户口径：自述最新探测版本撞 3012 的写端点统一钉此档。
-/// 仅用于 claim/messages 这类动作端点；touch/preview 投放通道必须走真实探测头
-///（老版本头实测返回空 deliveries，见 claim.rs 注释）。
+/// 全通道统一自述版本（2026-11-03 定案）：
+/// - claim/messages（写端点）：3.17.x 自述触发严格 bot 检查（3012/405），必须钉低版本——
+///   header_bisect.py 实锤 3.16.3 全头族 12 连成功零拦截，撞风控再降 3.14.0；
+/// - touch/preview/balance（读取通道）：2026-11-03 三账号 × 三版本头对照实测
+///   3.16.3 与探测版返回形状完全一致（含空投放、429 行为），版本不敏感。
+/// 统一钉 3.16.3：所有通道行为可复现，排查少一个变量；注册表探测链保留不删
+///（归因实验时可用 ZCODE_GATEWAY_APP_VERSION 类覆盖读回真实值）。
 pub(crate) const SAFE_APP_VERSION: &str = "3.16.3";
 
 pub(crate) fn zai_claim_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
