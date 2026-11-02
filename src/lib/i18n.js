@@ -58,3 +58,19 @@ export function stripErr(e) {
   const s = typeof e === "string" ? e : String(e);
   return errCode(e) ? s.replace(/^[a-z_]+:/, "") : s;
 }
+
+// 键 parity 校验：两份 locale 表键集合必须一致，漏翻在 dev 下立刻暴露（生产只 warn 一次）
+{
+  const zk = new Set(Object.keys(zh));
+  const ek = new Set(Object.keys(en));
+  const onlyZh = [...zk].filter((k) => !ek.has(k));
+  const onlyEn = [...ek].filter((k) => !zk.has(k));
+  const bad = [];
+  if (onlyZh.length) bad.push(`仅 zh 有: ${onlyZh.join(", ")}`);
+  if (onlyEn.length) bad.push(`仅 en 有: ${onlyEn.join(", ")}`);
+  if (bad.length) {
+    const msg = `[i18n] locale 键不一致 → ${bad.join("；")}`;
+    if (import.meta.env.DEV) throw new Error(msg);
+    console.warn(msg);
+  }
+}

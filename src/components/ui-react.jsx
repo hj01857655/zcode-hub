@@ -23,16 +23,36 @@ function useUi() {
   return ui;
 }
 
+function Toast({ x }) {
+  // 长 detail（多行/超长，如完整响应体）默认收起，点击整条切换展开
+  const [open, setOpen] = useState(false);
+  const long = !!x.detail && (x.detail.includes("\n") || x.detail.length > 90);
+  const shown = long && !open ? x.detail.split("\n")[0].slice(0, 90) + "…" : x.detail;
+  return (
+    <div
+      className={"toast " + x.kind + (long ? " expandable" : "") + (open ? " open" : "")}
+      onClick={long ? () => setOpen(!open) : undefined}
+      title={long ? t(open ? "m.toastCollapse" : "m.toastExpand") : undefined}
+    >
+      <span className="t-ic"><Ic name={x.kind === "ok" ? "check" : "alert"} size={16} /></span>
+      <span className="t-body">
+        {x.msg}
+        {x.detail
+          ? <span className="detail">
+              {shown}
+              {long ? <span className="detail-caret">{open ? " ▲" : " ▼"}</span> : ""}
+            </span>
+          : ""}
+      </span>
+    </div>
+  );
+}
+
 function ToastHost() {
   const u = useUi();
   return (
     <div className="toast-zone">
-      {u.toasts.map((x) => (
-        <div key={x.id} className={`toast ${x.kind}`}>
-          <span className="t-ic"><Ic name={x.kind === "ok" ? "check" : "alert"} size={16} /></span>
-          <span className="t-body">{x.msg}{x.detail ? <span className="detail">{x.detail}</span> : ""}</span>
-        </div>
-      ))}
+      {u.toasts.map((x) => <Toast key={x.id} x={x} />)}
     </div>
   );
 }

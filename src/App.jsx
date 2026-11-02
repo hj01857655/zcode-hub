@@ -263,6 +263,15 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
           <div className="row-meta">{metaBits}</div>
         </div>
         <div className="row-actions">
+          <button
+            className={"icon-btn" + (isActive ? " on" : "")}
+            title={isActive ? t("btn.current") : t("btn.switch")}
+            aria-label={isActive ? t("btn.current") : t("btn.switch")}
+            onClick={() => actions.askSwitch(a.id)}
+            disabled={isActive}
+          >
+            <Ic name={isActive ? "check" : "swap"} size={16} />
+          </button>
           <button className="icon-btn" title={t("btn.quota")} aria-label={t("btn.quota")} onClick={() => actions.acctQuota(a.id)}>
             <Ic name="gauge" size={16} />
           </button>
@@ -283,15 +292,6 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
           </button>
           <button className="icon-btn danger" title={t("btn.delete")} aria-label={t("btn.delete")} onClick={() => actions.delete(a.id)}>
             <Ic name="x" size={16} />
-          </button>
-          <button
-            className={"icon-btn" + (isActive ? " on" : "")}
-            title={isActive ? t("btn.current") : t("btn.switch")}
-            aria-label={isActive ? t("btn.current") : t("btn.switch")}
-            onClick={() => actions.askSwitch(a.id)}
-            disabled={isActive}
-          >
-            <Ic name={isActive ? "check" : "swap"} size={16} />
           </button>
         </div>
       </div>

@@ -601,8 +601,12 @@ input:focus-visible,
 .toast.ok { border-color: var(--mint-dim); }
 .toast.err { border-color: var(--red-dim); color: var(--err-soft); }
 .toast.warn { border-color: rgba(214, 158, 46, .45); }
-.toast .detail { display: block; color: var(--ink-mute); font-size: 14.5px; margin-top: 2px; }
+.toast .detail { display: block; color: var(--ink-mute); font-size: 14.5px; margin-top: 2px; white-space: pre-wrap; word-break: break-all; }
 .toast.err .detail { color: var(--err-soft-2); }
+/* 长响应体 toast：可点击展开（完整响应），展开态加宽便于看 JSON */
+.toast.expandable { cursor: pointer; }
+.toast.expandable.open { max-width: 720px; }
+.toast .detail-caret { color: var(--ink-mute); font-size: 12px; margin-left: 4px; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
 .loading {
@@ -1658,6 +1662,10 @@ input:focus-visible,
 }
 .x-pool-tag.warn { color: var(--amber); }
 .x-pool-tag.bad { color: var(--red); }
+/* 池摘要条下的模型面并集 tag 行 */
+.x-pool-models { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 12px 0; }
+.x-pool-tag.model { margin-left: 0; color: var(--ink-mute); }
+.x-pool-tag.model::before { content: "#"; opacity: 0.6; margin-right: 2px; }
 /* 池卡片自滃滚动上限 + 折叠计数行 */
 .x-pool { max-height: 340px; overflow-y: auto; }
 .x-pool-more { cursor: pointer; color: var(--ink-mute); font-size: 11px; padding: 4px 0; }
@@ -1907,16 +1915,16 @@ input:focus-visible,
 /* 仪表盘 */
 .dash-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
 }
 .dash-card {
   position: relative;
   background: var(--bg-2);
   border: 1px solid var(--hairline-soft);
-  border-radius: 10px;
-  padding: 12px 14px;
+  border-radius: 8px;
+  padding: 9px 12px;
   overflow: hidden;
   transition: border-color .15s ease;
 }
@@ -1932,9 +1940,9 @@ input:focus-visible,
 }
 .dash-card.state-ok::before { background: var(--mint); opacity: .85; }
 .dash-label {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--ink-mute);
-  margin-bottom: 5px;
+  margin-bottom: 3px;
   letter-spacing: .04em;
   display: flex;
   align-items: center;
@@ -1942,7 +1950,7 @@ input:focus-visible,
 }
 .dash-label .ic { opacity: .75; }
 .dash-value {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
   color: var(--ink);
@@ -1954,7 +1962,7 @@ input:focus-visible,
   text-overflow: ellipsis;
 }
 .dash-value.ok { color: var(--mint); }
-.dash-value.dim { color: var(--ink-mute); font-weight: 400; font-size: 15px; }
+.dash-value.dim { color: var(--ink-mute); font-weight: 400; font-size: 13.5px; }
 /* 账号区小节标题：与网关运行区标题同级平衡，轻量不抢卡片区 */
 .dash-sub {
   display: flex;
