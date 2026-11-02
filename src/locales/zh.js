@@ -92,7 +92,7 @@ export const zh = {
   "m.refreshClaimSkipped": "已跳过：{name}",
   "m.claimSkippedAll": "没有可刷新的账号（{names}）",
   "m.skipCooldown": "失败冷却中，约 {n} 分钟后可再试",
-  "m.refreshFreshSkip": "新近已刷新，跳过",
+  "m.refreshFreshSkip": "{name} 新近已刷新（{n} 秒内），稍后再试",
   "m.skipHasPlans": "已有可领套餐，待领取",
   "m.toastExpand": "点击展开完整响应",
   "m.toastCollapse": "点击收起",

@@ -621,6 +621,12 @@ export const actions = {
   async refreshClaimOne(id) {
     if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
     if (store.claimable[id]?.busy) return;
+    // 与批量同口径：60s 内刷过的号不再打 activation（写端点，叠加请求撞风控）
+    if (Date.now() - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS) {
+      const n = Math.ceil((Date.now() - (store.claimable[id]?.refreshedAt || 0)) / 1000);
+      toast(t("m.refreshFreshSkip", { name: accountName(id), n }), "warn");
+      return;
+    }
     const name = accountName(id);
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
     refreshOneBusy = true;
