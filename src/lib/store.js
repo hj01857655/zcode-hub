@@ -552,30 +552,66 @@ export const actions = {
     claimAllRunning = true;
     claimActive = true;
     emit();
+    // 防 429：基础间隔 2.6s + 抖动；命中 429（claim_start 异常或结果 message 带 429）
+    // 指数退避 15s→30s→60s→封顶 120s，未再命中即清零
+    let backoffMs = 0;
+    const hit429 = (s) => String(s || "").includes("429");
     try {
       for (let i = 0; i < ids.length; i++) {
         const id = ids[i];
         const plan = store.claimable[id]?.plans?.[0];
         if (!plan) continue; // 刷新可能在排队期间清空了该账号的 plans
         const name = store.state.accounts.find((a) => a.id === id)?.name || id;
+        let q429 = false;
         try {
           await invoke("claim_start", { id, planId: plan.plan_id });
         } catch (e) {
-          toast(t("m.claimAccountErr", { name, err: stripErr(e) }), "err");
-          continue;
+          // 429 时验证码窗还没开，不补 claim_cancel，直接走退避
+          q429 = hit429(stripErr(e));
+          if (!q429) toast(t("m.claimAccountErr", { name, err: stripErr(e) }), "err");
         }
-        const r = await waitForClaimResult(id, 120000);
-        if (!r) {
-          toast(t("m.claimAcctTimeout", { name }), "warn");
-          await invoke("claim_cancel").catch(() => {});
+        if (!q429) {
+          const r = await waitForClaimResult(id, 120000);
+          if (!r) {
+            toast(t("m.claimAcctTimeout", { name }), "warn");
+            await invoke("claim_cancel").catch(() => {});
+          } else if (r.ok === false && hit429(r.message)) q429 = true;
         }
-        if (i < ids.length - 1) await new Promise((res) => setTimeout(res, 1200));
+        if (q429) {
+          backoffMs = Math.min(backoffMs ? backoffMs * 2 : 15000, 120000);
+          toast(t("m.claimAllThrottle", { name, n: Math.round(backoffMs / 1000) }), "warn");
+        } else {
+          backoffMs = 0;
+        }
+        if (i < ids.length - 1) await new Promise((res) => setTimeout(res, 2600 + Math.random() * 1200 + backoffMs));
       }
     } finally {
       claimAllRunning = false;
       claimActive = false;
       emit();
     }
+  },
+
+  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_refresh = 激活事件 + preview/touch），
+  // 但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
+  async refreshClaimOne(id) {
+    if (refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
+    if (store.claimable[id]?.busy) return;
+    const name = accountName(id);
+    store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
+    emit();
+    try {
+      const r = await invoke("claim_refresh", { id });
+      const plans = r.plans || [];
+      store.claimable[id] = { plans, err: null, busy: false };
+      if (r.activationError) toast(t("m.refreshClaimAcctErr", { name, err: stripErr(r.activationError) }), "warn");
+      toast(t("m.refreshClaimOneDone", { name, n: plans.length }), plans.length ? "ok" : "warn");
+    } catch (e) {
+      store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: stripErr(e), busy: false };
+      toast(t("m.refreshClaimAcctErr", { name, err: stripErr(e) }), "err");
+    }
+    scheduleNext(id);
+    emit();
   },
 
   async refreshClaim() {

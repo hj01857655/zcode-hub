@@ -266,6 +266,15 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
           <button className="icon-btn" title={t("btn.quota")} aria-label={t("btn.quota")} onClick={() => actions.acctQuota(a.id)}>
             <Ic name="gauge" size={16} />
           </button>
+          <button
+            className={"icon-btn" + (store.claimable[a.id]?.busy ? " on" : "")}
+            title={t("btn.refreshClaimOne")}
+            aria-label={t("btn.refreshClaimOne")}
+            onClick={() => actions.refreshClaimOne(a.id)}
+            disabled={claimDisabled || store.claimable[a.id]?.busy}
+          >
+            <Ic name="gift" size={16} />
+          </button>
           <button className="icon-btn" title={t("btn.rename")} aria-label={t("btn.rename")} onClick={() => actions.rename(a.id)}>
             <Ic name="pen" size={16} />
           </button>

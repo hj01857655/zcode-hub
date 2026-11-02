@@ -194,6 +194,15 @@ pub(crate) fn zai_billing_headers_with_mid(token: &str, mid: Option<String>) -> 
     zai_headers_with_version(zcode_app_version(), token, mid)
 }
 
+/// 2026-11-01 gateway 实锤 + 11-02 用户口径：自述最新探测版本撞 3012 的写端点统一钉此档。
+/// 仅用于 claim/messages 这类动作端点；touch/preview 投放通道必须走真实探测头
+///（老版本头实测返回空 deliveries，见 claim.rs 注释）。
+pub(crate) const SAFE_APP_VERSION: &str = "3.16.3";
+
+pub(crate) fn zai_claim_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
+    zai_headers_with_version(SAFE_APP_VERSION.into(), token, mid)
+}
+
 pub(crate) struct OAuthFlowHeaders(pub Vec<(String, String)>);
 
 pub(crate) fn zai_oauth_headers_with_mid(token: &str, mid: Option<String>) -> OAuthFlowHeaders {

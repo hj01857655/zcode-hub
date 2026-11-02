@@ -410,7 +410,8 @@ pub fn submit_claim(
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
     let mut req = agent().post(BILLING_CLAIM_URL);
-    for (k, v) in quota::zai_billing_headers_with_mid(&token, device_mid) {
+    // claim 是动作端点，走钉死的 SAFE 版本头（见 quota::SAFE_APP_VERSION）；投放通道不受影响
+    for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
         req = req.set(&k, &v);
     }
     req = req.set("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
