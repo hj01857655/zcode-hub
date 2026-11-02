@@ -236,10 +236,23 @@ pub fn preview_plans(
         Ok(p) => p,
         Err(e) => {
             preview_err = e;
-            if touch.is_empty() {
-                return Err(preview_err);
+            match &touch {
+                Ok(t) if !t.is_empty() => t.clone(),
+                _ => return Err(preview_err),
             }
-            touch.clone()
+        }
+    };
+    // touch 通道失败时「无投放」的结论不可信（429/网络错都会被当成空 deliveries）：
+    // preview 确认空而 touch 又坏了 → 报错让前端走 catch 保留既有可领条，
+    // 而不是拿一个被限流污染的空结果把刚刷出来的资格顶掉
+    let touch = match touch {
+        Ok(t) => t,
+        Err(e) => {
+            if base.is_empty() {
+                return Err(e);
+            }
+            eprintln!("[zsw] marketing/touch: {e}");
+            vec![]
         }
     };
     for tp in touch {
@@ -261,7 +274,9 @@ pub fn preview_plans(
 /// 才是「该号当前可领」的权威信号（实测 preview 恒空，五个已领到的号也一样空）。
 /// 此端点对 app_version 敏感——老版本头（如 3.14.0）实测返回空 deliveries，必须走真实客户端版本头。
 /// 投放按 mid + 账号双重分配，mid 用该号自己的。
-fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
+/// 失败一律 Err 上抛而非吞成空列表：调用方要区分「确认无投放」和「这次没查着」，
+/// 后者冒充前者会把限流期间的空响应当权威结论，顶掉前端已展示的可领条
+fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, String> {
     let url = format!(
         "{MARKETING_TOUCH_URL}?seq=1&app_version={}&platform={}",
         quota::zcode_app_version(),
@@ -271,27 +286,18 @@ fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
     for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
         req = req.set(&k, &v);
     }
-    let resp = match req.call() {
-        Ok(r) => match r.into_string() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[zsw] marketing/touch: read failed: {e}");
-                return vec![];
-            }
-        },
-        Err(e) => {
-            eprintln!("[zsw] marketing/touch: {}", http_err("", e));
-            return vec![];
-        }
-    };
-    let v: Value = match serde_json::from_str(&resp) {
-        Ok(x) => x,
-        Err(_) => return vec![],
-    };
-    let dels = match v.pointer("/data/deliveries").and_then(|d| d.as_array()) {
-        Some(a) => a.clone(),
-        None => return vec![],
-    };
+    let resp = req
+        .call()
+        .map_err(|e| http_err(&crate::i18n::tr("err.claim.touch_req"), e))?
+        .into_string()
+        .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    let v: Value = serde_json::from_str(&resp)
+        .map_err(|e| crate::i18n::trf("err.http.parse", &[("e", &e.to_string())]))?;
+    let dels = v
+        .pointer("/data/deliveries")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .ok_or_else(|| crate::i18n::tr("err.claim.touch_shape"))?;
     let mut out: Vec<ClaimPlan> = vec![];
     for d in &dels {
         let wanted: Vec<String> = d
@@ -353,7 +359,7 @@ fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) fn http_err(prefix: &str, e: ureq::Error) -> String {
@@ -365,7 +371,14 @@ pub(crate) fn http_err(prefix: &str, e: ureq::Error) -> String {
                 .iter()
                 .find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)))
             .unwrap_or_default();
-        return format!("{prefix} HTTP {code}: {msg}");
+        // 完整响应体附在第二行（截 750 字符保 UTF-8 边界）：前端 toast 收起显示短句，点开展开看全文
+        let body = body.trim();
+        if body.is_empty() {
+            return format!("{prefix} HTTP {code}: {msg}");
+        }
+        let cut = body.char_indices().nth(750).map(|(i, _)| i).unwrap_or(body.len());
+        let clipped = &body[..cut];
+        return format!("{prefix} HTTP {code}: {msg}\n{clipped}");
     }
     format!("{prefix} {e}")
 }
@@ -383,7 +396,8 @@ fn preview_once(url: &str, token: &str, mid: Option<String>) -> Result<Vec<Claim
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     if code != 0 {
-        return Err(failure_message(code, &v));
+        // 码进错误串：归因/对照服务端文档全靠它，只有文案没有码没法定位
+        return Err(format!("[{code}] {}", failure_message(code, &v)));
     }
     let plans = v
         .pointer("/data/plans")
