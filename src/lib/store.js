@@ -37,7 +37,7 @@ const AUTO_CLAIM_FIRST_DELAY_MS = 2 * 60 * 1000;
 const BOOT_UPDATE_CHECK_MS = 15_000;
 const AUTO_CLAIM_WAIT_MS = 45_000;
 const AUTO_CLAIM_PER_ACCOUNT_CAP = 5;
-const AUTO_CLAIM_ACCT_GAP_MS = 5_000;
+const AUTO_CLAIM_ACCT_GAP_MS = 2_000;
 const AUTO_ABORT_WAIT_MS = 90_000;
 let autoClaimRunning = false;
 const autoClaimCooldown = {};
@@ -45,6 +45,8 @@ let autoAbortRequested = false;
 let claimActive = false;
 let lastAutoRound = null;
 let autoToggleBusy = false;
+// 单号刷新资格在跑的标志：它只占 claimable[id].busy，批量刷新/自动领取开关看不到它
+let refreshOneBusy = false;
 
 const SWEEP_PERIOD = 5 * 60 * 1000;
 const SWEEP_JITTER = 0.2;
@@ -246,6 +248,19 @@ async function sweepTick() {
 }
 
 // ---- auto claim ----
+// 批量跳过判定：登录令牌已过期 / 快照缺资格登录信息的号刷了必失败，批量操作前剔除
+const skipReason = (a) => (a?.jwt_expired ? t("btn.jwtExpired") : a?.has_user_info === false ? t("btn.relogin") : null);
+
+// 有界并发批量刷新资格：claim_refresh 每号独立、跑 blocking 线程池无共享锁。
+// 并发档位与 sweep / 邀请页同款（4 + 800ms 错峰）
+async function refreshClaimBatch(ids, chunkGapMs, onOne) {
+  const CONCURRENCY = 4;
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    await Promise.all(ids.slice(i, i + CONCURRENCY).map((id) => onOne(id)));
+    if (i + CONCURRENCY < ids.length) await new Promise((res) => setTimeout(res, chunkGapMs));
+  }
+}
+
 function autoClaimCooldownFor(r) {
   const now = Date.now();
   if (r.code === 1005 && r.nextAt) return r.nextAt;
@@ -258,6 +273,7 @@ async function autoClaimTick() {
   if (!store.state?.auto_claim || autoClaimRunning) return;
   if (claimActive || claimAllRunning || refreshClaim.running) return;
   const ids = (store.state.accounts || [])
+    .filter((a) => !skipReason(a))
     .map((a) => a.id)
     .filter((id) => (autoClaimCooldown[id] ?? 0) <= Date.now());
   if (!ids.length) {
@@ -270,10 +286,11 @@ async function autoClaimTick() {
   let roundClaimed = 0, roundSkipped = 0;
   emit();
   try {
-    for (const id of ids) {
-      if (!store.state?.auto_claim || autoAbortRequested) break;
-      if (!(store.state.accounts || []).some((a) => a.id === id)) continue;
-      let gotAny = false;
+    // 阶段 1：查询有界并发（refreshClaimBatch：并发 2 + chunk 间隔）
+    const accIds = () => store.state.accounts || [];
+    await refreshClaimBatch(ids, 800, async (id) => {
+      if (!store.state?.auto_claim || autoAbortRequested) return;
+      if (!accIds().some((a) => a.id === id)) return;
       store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
       try {
         const r = await invoke("claim_refresh", { id });
@@ -282,9 +299,15 @@ async function autoClaimTick() {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
         roundSkipped++;
-        continue;
       }
-      emit();
+    });
+    emit();
+    // 阶段 2：领取保持串行——验证码会话单例（claimWaiter 单槽），且 429/风控按出口 IP 计数，并发领取得不偿失
+    for (const id of ids) {
+      if (!store.state?.auto_claim || autoAbortRequested) break;
+      if (!(store.state.accounts || []).some((a) => a.id === id)) continue;
+      if (autoClaimCooldown[id] > Date.now()) continue;
+      let gotAny = false;
       let attempts = 0;
       let progressed = true;
       while (progressed && attempts < AUTO_CLAIM_PER_ACCOUNT_CAP) {
@@ -544,6 +567,7 @@ export const actions = {
 
   async claimAll() {
     const ids = (store.state?.accounts || [])
+      .filter((a) => !skipReason(a))
       .map((a) => a.id)
       .filter((id) => (store.claimable[id]?.plans || []).length > 0);
     if (!ids.length) { toast(t("m.noClaimableAccounts"), "warn"); return; }
@@ -595,30 +619,70 @@ export const actions = {
   // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_refresh = 激活事件 + preview/touch），
   // 但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
   async refreshClaimOne(id) {
-    if (refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
+    if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
     if (store.claimable[id]?.busy) return;
     const name = accountName(id);
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
+    refreshOneBusy = true;
     emit();
     try {
       const r = await invoke("claim_refresh", { id });
       const plans = r.plans || [];
-      store.claimable[id] = { plans, err: null, busy: false };
-      if (r.activationError) toast(t("m.refreshClaimAcctErr", { name, err: stripErr(r.activationError) }), "warn");
-      toast(t("m.refreshClaimOneDone", { name, n: plans.length }), plans.length ? "ok" : "warn");
+      store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
+      // 0 个可领要给原因：缺登录信息（资格链路断）与「活动没开放/已领完」是两回事
+      if (r.activationError) {
+        toast(t("m.refreshClaimAcctErr", { name, err: stripErr(r.activationError) }), "warn");
+      } else if (plans.length) {
+        toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
+      } else if (!r.activated) {
+        toast(t("m.refreshClaimNoLogin", { name }), "warn", t("m.refreshClaimNoLoginDetail"));
+      } else {
+        toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail"));
+      }
     } catch (e) {
       store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: stripErr(e), busy: false };
       toast(t("m.refreshClaimAcctErr", { name, err: stripErr(e) }), "err");
     }
     scheduleNext(id);
+    refreshOneBusy = false;
     emit();
   },
 
   async refreshClaim() {
-    const ids = (store.state?.accounts || []).map((a) => a.id);
-    if (!ids.length) return;
+    const accounts = store.state?.accounts || [];
+    const now0 = Date.now();
+    // 失败号复用自动领取的冷却表：冷却期内重试必然同码失败，白打请求还多送遥测
+    const cooled = (id) => (autoClaimCooldown[id] ?? 0) > now0;
+    // per-id 新近已刷新跳过：60s 内刷过的号（refreshedAt）批量时不再打 claim_refresh
+    // ——activation 是写端点，叠加请求就是领取链 429→3012 的同款场景
+    const fresh = (id) => now0 - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS;
+    // 已有可领套餐的号批量时跳过：重查对界面无增益，touch 投放波动返回空 deliveries 时
+    // 整体覆盖写回会把正在展示的可领条顶掉；要验证某个套餐是否还在用单号刷新（真实覆盖）
+    const hasPlans = (id) => (store.claimable[id]?.plans || []).length > 0;
+    const ids = accounts
+      .filter((a) => !skipReason(a))
+      .map((a) => a.id)
+      .filter((id) => !cooled(id))
+      .filter((id) => !fresh(id))
+      .filter((id) => !hasPlans(id));
+    const skippedBits = [
+      ...accounts.filter((a) => skipReason(a)).map((a) => `${a.name}（${skipReason(a)}）`),
+      ...accounts
+        .filter((a) => !skipReason(a) && cooled(a.id))
+        .map((a) => `${a.name}（${t("m.skipCooldown", { n: Math.ceil((autoClaimCooldown[a.id] - now0) / 60000) })}）`),
+      ...accounts
+        .filter((a) => !skipReason(a) && !cooled(a.id) && fresh(a.id))
+        .map((a) => `${a.name}（${t("m.refreshFreshSkip")}）`),
+      ...accounts
+        .filter((a) => !skipReason(a) && !cooled(a.id) && !fresh(a.id) && hasPlans(a.id))
+        .map((a) => `${a.name}（${t("m.skipHasPlans")}）`),
+    ];
+    if (!ids.length) {
+      toast(t("m.claimSkippedAll", { names: skippedBits.join("、") }), "warn");
+      return;
+    }
     const now = Date.now();
-    if (refreshClaim.running || claimAllRunning || (claimActive && !autoClaimRunning)) return;
+    if (refreshOneBusy || refreshClaim.running || claimAllRunning || (claimActive && !autoClaimRunning)) return;
     if (now < refreshClaim.cooldownUntil) {
       toast(t("btn.refreshClaimCooldownTitle", { n: Math.ceil((refreshClaim.cooldownUntil - now) / 1000) }), "warn");
       return;
@@ -641,33 +705,38 @@ export const actions = {
       }
     }
     let okCount = 0;
+    const failBits = [];
     try {
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
+      let done = 0;
+      await refreshClaimBatch(ids, 800, async (id) => {
         const name = store.state.accounts.find((a) => a.id === id)?.name || id;
-        refreshClaim.done = i + 1;
+        refreshClaim.done = ++done;
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
         emit();
         try {
           const r = await invoke("claim_refresh", { id });
-          store.claimable[id] = { plans: r.plans || [], err: null, busy: false };
+          store.claimable[id] = { plans: r.plans || [], err: null, busy: false, refreshedAt: Date.now() };
           if ((r.plans || []).length) okCount++;
-          if (r.activationError) toast(t("m.refreshClaimAcctErr", { name, err: stripErr(r.activationError) }), "warn");
+          if (r.activationError) failBits.push(`${name}: ${stripErr(r.activationError)}`);
         } catch (e) {
           store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
-          toast(t("m.refreshClaimAcctErr", { name, err: stripErr(e) }), "err");
+          failBits.push(`${name}: ${stripErr(e)}`);
         }
         scheduleNext(id);
         emit();
-        if (i < ids.length - 1) await new Promise((res) => setTimeout(res, 5000));
-      }
+      });
     } finally {
       refreshClaim.running = false;
       refreshClaim.cooldownUntil = Date.now() + REFRESH_CLAIM_COOLDOWN_MS;
       emit();
       setTimeout(stopRefreshTickerIfIdle, 1100);
     }
-    toast(t("m.refreshClaimDone", { n: ids.length, k: okCount }), "ok");
+    // 每号失败不再逐条弹：聚进汇总 detail；批量跳过的号也列在这里
+    toast(
+      t("m.refreshClaimDone", { n: ids.length, k: okCount }),
+      failBits.length ? "warn" : "ok",
+      [...skippedBits.map((s) => t("m.refreshClaimSkipped", { name: s })), ...failBits].join("\n"),
+    );
   },
 
   async referralBind(id, code) {
@@ -701,7 +770,7 @@ export const actions = {
   async toggleAutoClaim() {
     if (autoToggleBusy) return;
     const next = !store.state.auto_claim;
-    if (next && (autoClaimRunning || claimActive || claimAllRunning || refreshClaim.running)) {
+    if (next && (refreshOneBusy || autoClaimRunning || claimActive || claimAllRunning || refreshClaim.running)) {
       toast(t("m.claimBusy"), "warn");
       return;
     }
@@ -746,10 +815,12 @@ export function wireEvents() {
     if (claimWaiter && claimWaiter.accountId === p.accountId) claimWaiter.finish(p);
     if (p.ok === false) {
       let msg = p.message || t("m.unknownErr");
+      // 业务码直接亮出来（-1 = 网络/解析错误，无码可示）
+      const codeBit = Number.isFinite(p.code) && p.code >= 0 ? `[${p.code}] ` : "";
       if (p.code === 1005 && p.nextAt) {
         msg += t("m.claimNextAt", { time: new Date(p.nextAt).toLocaleString(localeTag(), { hour12: false }) });
       }
-      toast(t("m.claimFailed", { name: p.accountName, msg }), "err");
+      toast(t("m.claimFailed", { name: p.accountName, code: codeBit, msg }), "err");
     } else {
       const bits = [];
       const now = p.serverTime || Date.now();
