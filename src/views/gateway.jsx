@@ -290,19 +290,32 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         {/* 账号池：一行摘要条，点击跳账号管理页定位；明细在账号页看，不在主页堆 */}
         <label style={{ marginTop: 14 }}>{t("x.poolLabel")}</label>
         {status?.pool?.members?.length
-          ? <div className="x-pool-line" onClick={() => onOpenAccount?.()}>
-              <Ic name="list" size={14} />
-              <span>{t("x.poolSummary", {
-                n: poolSorted.filter((m) => !(m.cooldown_secs > 0)).length,
-                cool: poolSorted.filter((m) => m.cooldown_secs > 0).length,
-                inflight: poolSorted.reduce((a, m) => a + (m.inflight || 0), 0),
-                total: poolSorted.length,
-              })}</span>
-              {status.pool.global_backoff_secs > 0
-                ? <span className="x-pool-tag warn">{t("x.globalBackoff")} {status.pool.global_backoff_secs}s</span>
+          ? <>
+              {/* hover 明细：每号模型面（null=未拉取未知，[]=确认无桶） */}
+              <div
+                className="x-pool-line"
+                title={poolSorted.map((m) => `${m.name}: ${Array.isArray(m.models) ? (m.models.length ? m.models.join(", ") : t("x.poolNoBuckets")) : t("x.poolUnknown")}`).join("\n")}
+                onClick={() => onOpenAccount?.()}
+              >
+                <Ic name="list" size={14} />
+                <span>{t("x.poolSummary", {
+                  n: poolSorted.filter((m) => !(m.cooldown_secs > 0)).length,
+                  cool: poolSorted.filter((m) => m.cooldown_secs > 0).length,
+                  inflight: poolSorted.reduce((a, m) => a + (m.inflight || 0), 0),
+                  total: poolSorted.length,
+                })}</span>
+                {status.pool.global_backoff_secs > 0
+                  ? <span className="x-pool-tag warn">{t("x.globalBackoff")} {status.pool.global_backoff_secs}s</span>
+                  : null}
+                <span className="x-pool-caret">▸</span>
+              </div>
+              {/* 模型面并集（/v1/models 同源）：对外可请求的模型一目了然 */}
+              {status.models?.length
+                ? <div className="x-pool-models">
+                    {status.models.map((n) => <span key={n} className="x-pool-tag model">{n}</span>)}
+                  </div>
                 : null}
-              <span className="x-pool-caret">▸</span>
-            </div>
+            </>
           : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.poolEmpty")}</span></div>}
       </section>
 

@@ -1511,7 +1511,22 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
     // pool 快照：成员清单现取（账号库投影），池侧只回冷却/在飞/计数
     let members = gateway::pool::members().unwrap_or_default();
-    let snapshot = state.shared.pool.snapshot(&members);
+    let mut snapshot = state.shared.pool.snapshot(&members);
+    // 每号模型面拼进成员（server.rs ensure_model_faces 回写镜像）：null=未知，[]=确认无桶
+    if let Some(arr) = snapshot.get_mut("members").and_then(serde_json::Value::as_array_mut) {
+        let faces = state.shared.model_faces();
+        for m in arr.iter_mut() {
+            let id = match m.get("id").and_then(serde_json::Value::as_str) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            m["models"] = match faces.get(&id) {
+                Some(Some(list)) => json!(list),
+                Some(None) => json!([]),
+                None => serde_json::Value::Null,
+            };
+        }
+    }
     Ok(json!({
         "running": state.is_running(),
         "port": cfg.port,

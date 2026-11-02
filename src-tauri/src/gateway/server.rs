@@ -19,10 +19,9 @@ struct SvcState {
     backoff_secs: u64,
     /// SSE keepalive 秒数（配置面；0 = 关闭）
     keepalive_secs: u64,
-    /// /v1/models 动态模型面缓存：(抓取时刻, 模型名集合)
-    models_cache: tokio::sync::RwLock<Option<(std::time::Instant, Vec<String>)>>,
     /// per-account 模型面缓存：id → (抓取时刻, Some(模型集)=已确认 / None=拉取失败)。
-    /// pick 按模型路由用：失败负缓存 60s 内放行该号（避免网络抖动把号误踢出池）
+    /// pick 按模型路由用：失败负缓存 60s 内放行该号（避免网络抖动把号误踢出池）。
+    /// /v1/models 聚合共用这一份缓存——不另设池级缓存，一份 balance 拉取两处受益
     models_by_acct: tokio::sync::RwLock<std::collections::HashMap<String, (std::time::Instant, Option<Vec<String>>)>>,
     /// 跨线程共享：pool 调度器 + 请求日志环 + 计数（twoapi_status 经 TwoApiState 读取）
     shared: std::sync::Arc<super::GatewayShared>,
@@ -52,7 +51,6 @@ pub async fn serve(
         max_retries,
         backoff_secs,
         keepalive_secs,
-        models_cache: tokio::sync::RwLock::new(None),
         models_by_acct: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         shared,
     });
@@ -70,7 +68,7 @@ pub async fn serve(
             timeout_mw,
         ))
         .layer(axum::middleware::from_fn_with_state(cors_origins, cors_mw))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -80,6 +78,19 @@ pub async fn serve(
         }
     };
     eprintln!("[gateway] serving on {addr}");
+    // 启动预热：后台拉一次全池模型面，池面板/账号行不用等第一个请求才有模型数据
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut members = match super::pool::members() {
+                Ok(m) => m,
+                Err(_) => return,
+            };
+            if !members.is_empty() {
+                ensure_model_faces(&st, &mut members).await;
+            }
+        });
+    }
     let _ = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = shutdown.changed().await;
@@ -107,12 +118,9 @@ fn check_auth(state: &SvcState, headers: &HeaderMap) -> Result<(), StatusCode> {
     Ok(())
 }
 
-/// /v1/models 缓存 TTL：entitlements 变化不频繁（领取/到期才变），5 分钟足够。
-const MODELS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// /v1/models：动态模型面——聚合池内账号 billing/balance 的 entitlements
-/// （balances[].show_name 即模型名；实测 0817 周卡号两个模型、1102 夜卡号只有 Flash，
-/// 静态表无法表达）。5 分钟缓存；全部取不到时回落 MODEL_LIST 静态表保底。
+/// /v1/models：动态模型面——聚合池内账号 live 桶的模型并集（live 判定见 fetch_model_names）。
+/// 与请求路由共用同一份号级缓存（ensure_model_faces）：缓存命中零网络，miss 才并发拉取回填；
+/// 不另设池级缓存，避免同一份 balance 两条缓存各拉各的。
 async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
     check_auth(&state, &headers)?;
     let model = |id: &str| {
@@ -121,23 +129,28 @@ async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMa
             "permission": [], "root": id, "parent": null,
         })
     };
-    // 缓存命中直接回
-    {
-        let cache = state.models_cache.read().await;
-        if let Some((at, ids)) = cache.as_ref() {
-            if at.elapsed() < MODELS_CACHE_TTL {
-                return Ok(Json(json!({
-                    "object": "list",
-                    "data": ids.iter().map(|id| model(id)).collect::<Vec<_>>(),
-                })));
+    let members = super::pool::members().unwrap_or_default();
+    let mut members = members;
+    ensure_model_faces(&state, &mut members).await;
+    let mut ids: Vec<String> = Vec::new();
+    for m in &members {
+        // models: None（拉取失败/未知）不贡献并集——该号按万能号放行请求，
+        // 但 /v1/models 不替它虚构模型名；models: Some(空) 也不贡献
+        if let Some(list) = &m.models {
+            for name in list {
+                if !ids.iter().any(|x| x.eq_ignore_ascii_case(name)) {
+                    ids.push(name.clone());
+                }
             }
         }
     }
-    // 过期/未缓存：聚合池内账号 entitlements
-    let ids = refresh_model_list(&state).await;
+    // 聚合成功写回 GatewayShared：gateway_status（UI 模型列表）同源生效
     if !ids.is_empty() {
-        *state.models_cache.write().await = Some((std::time::Instant::now(), ids.clone()));
+        if let Ok(mut shared) = state.shared.models.lock() {
+            *shared = ids.clone();
+        }
     }
+    // 全号模型面未知/为空时回落静态表保底（与旧行为一致）
     let list: Vec<String> = if ids.is_empty() {
         crate::gateway::MODEL_LIST.iter().map(|s| s.to_string()).collect()
     } else {
@@ -151,6 +164,41 @@ async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMa
 
 /// 单账号 entitlements 抓取：GET billing/balance，取 balances[].show_name 去重。
 /// 失败返回空（不连坐聚合）。
+/// 数值字段兼容：数字或数字字符串（magpie startNum 同款，老口径 balance 会给字符串）
+fn balance_num(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+}
+
+/// 桶死活判定（magpie giftSpent 同款）：余量字段优先，缺失时用 used/total 推。
+/// 「Both the card and the request route use the same test for a spent bucket」——
+/// 路由面和额度卡必须同一把尺子，这里只服务路由面。
+fn bucket_spent(b: &Value) -> bool {
+    match b.get("remaining_units").and_then(balance_num) {
+        Some(left) => left <= 0.0,
+        None => match (
+            b.get("total_units").and_then(balance_num),
+            b.get("used_units").and_then(balance_num),
+        ) {
+            (Some(t), Some(u)) => u >= t,
+            _ => false,
+        },
+    }
+}
+
+/// 桶归属判定（magpie same() 同款）：user_plan_id 双方都有才用它，否则比 plan_id
+fn bucket_owned_by(b: &Value, p: &Value) -> bool {
+    if let (Some(x), Some(y)) = (b.get("user_plan_id"), p.get("user_plan_id")) {
+        if x.is_string() && y.is_string() {
+            return x == y;
+        }
+    }
+    fn pid(v: &Value) -> &str {
+        v.get("plan_id").and_then(Value::as_str).unwrap_or("")
+    }
+    !pid(b).is_empty() && pid(b) == pid(p)
+}
+
 async fn fetch_model_names(
     http: &reqwest::Client,
     token: &str,
@@ -168,16 +216,94 @@ async fn fetch_model_names(
     let Ok(resp) = req.send().await else {
         return None;
     };
+    // 错误响应（401/3012 风控体/429）往往也是合法 JSON 但没有 balances——按失败处理进负缓存，
+    // 不能落进 Some(空) 被误判成「确认无桶」踢出池
+    if !resp.status().is_success() {
+        return None;
+    }
     let Ok(v) = resp.json::<Value>().await else {
         return None;
     };
+    if !crate::quota::business_ok(&v) {
+        return None;
+    }
+    // 模型面 = live 桶的模型并集（magpie zcode 插件 startPlan 同款语义）：
+    // plan status=active 且未过 ends_at；桶 expires_at 未过、余量未尽——spent 桶仍声明
+    // 模型但不可扣，进路由面只会把请求喂给必败号。桶的模型来自 capabilities 的
+    // "model:" 条目（show_name 只是显示名），缺失时回落 show_name。
+    // now 以 server_time 为基准，防本机时钟偏差误杀刚领的桶。
+    let now = v
+        .pointer("/data/server_time")
+        .and_then(balance_num)
+        .filter(|t| *t > 0.0)
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0)
+        });
+    let plan_live = |p: &Value| -> bool {
+        let st = p
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_default();
+        if st != "active" {
+            return false;
+        }
+        let end = p.get("ends_at").and_then(balance_num).unwrap_or(0.0);
+        !(end > 0.0 && end <= now)
+    };
+    let plans = v.pointer("/data/plans").and_then(Value::as_array);
     let mut out: Vec<String> = Vec::new();
     if let Some(balances) = v.pointer("/data/balances").and_then(Value::as_array) {
         for b in balances {
-            if let Some(name) = b.get("show_name").and_then(Value::as_str) {
-                if !name.is_empty() && !out.iter().any(|x| x == name) {
-                    out.push(name.to_string());
+            // plans 字段在才做归属校验（plans 空或无 live plan → 全部桶不归属 → 空模型面）；
+            // 字段缺失的响应按无 plan 结构处理，桶只走自身 live 判定
+            if let Some(ps) = plans {
+                if !ps.iter().any(|p| plan_live(p) && bucket_owned_by(b, p)) {
+                    continue;
                 }
+            }
+            let exp = b.get("expires_at").and_then(balance_num).unwrap_or(0.0);
+            if exp > 0.0 && exp <= now {
+                continue;
+            }
+            if bucket_spent(b) {
+                continue;
+            }
+            let caps: Vec<String> = b
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(|c| c.trim())
+                        .filter(|c| c.starts_with("model:") || !c.contains(':'))
+                        .map(|c| c.trim_start_matches("model:").trim().to_string())
+                        .filter(|c| !c.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let names = if caps.is_empty() {
+                b.get("show_name")
+                    .and_then(Value::as_str)
+                    .map(|s| vec![s.trim().to_string()])
+                    .unwrap_or_default()
+            } else {
+                caps
+            };
+            for m in names {
+                if m.is_empty() || out.iter().any(|x| x.eq_ignore_ascii_case(&m)) {
+                    continue;
+                }
+                // 对齐静态表的 catalog 大小写（capabilities 全小写，下拉/客户端展示宜用 GLM-5.3 形态）
+                let m = crate::gateway::MODEL_LIST
+                    .iter()
+                    .find(|x| x.eq_ignore_ascii_case(&m))
+                    .map(|x| x.to_string())
+                    .unwrap_or(m);
+                out.push(m);
             }
         }
     }
@@ -213,50 +339,29 @@ async fn ensure_model_faces(state: &SvcState, members: &mut [pool::PoolMember]) 
     if to_fetch.is_empty() {
         return;
     }
-    let mut fetched: Vec<(usize, Option<Vec<String>>)> = Vec::new();
+    // 并发拉取：互不依赖，冷启动 14 号从串行最坏 ~100s（8s 超时×14）压到单轮 ~8s
+    let mut handles = Vec::new();
     for &i in &to_fetch {
-        let m = &members[i];
-        // Some(空)=确认无桶（照实缓存，pick 永不命中该号）；None=拉取失败（负缓存按未知放行）
-        let face = fetch_model_names(&state.http, &m.token, m.mid.clone()).await;
+        let http = state.http.clone();
+        let token = members[i].token.clone();
+        let mid = members[i].mid.clone();
+        handles.push((i, tokio::spawn(async move { fetch_model_names(&http, &token, mid).await })));
+    }
+    let mut fetched: Vec<(usize, Option<Vec<String>>)> = Vec::new();
+    for (i, h) in handles {
+        // JoinError（任务 panic/取消）按拉取失败处理，不连坐其他号
+        let face = h.await.unwrap_or(None);
         members[i].models = face.clone();
         fetched.push((i, face));
     }
     let mut cache = state.models_by_acct.write().await;
     for (i, face) in fetched {
-        cache.insert(members[i].id.clone(), (std::time::Instant::now(), face));
-    }
-}
-
-/// 聚合池内全部可用账号的模型名并集；任一号失败不连坐。
-async fn refresh_model_list(state: &SvcState) -> Vec<String> {
-    let Ok(members) = super::pool::members() else {
-        return Vec::new();
-    };
-    let mut handles = Vec::new();
-    for m in members {
-        let http = state.http.clone();
-        handles.push(tokio::spawn(async move {
-            fetch_model_names(&http, &m.token, m.mid).await
-        }));
-    }
-    let mut out: Vec<String> = Vec::new();
-    for h in handles {
-        // JoinError 与拉取失败（None）都不连坐并集；Some(空) 本来就不贡献模型名
-        if let Ok(Some(names)) = h.await {
-            for name in names {
-                if !out.iter().any(|x| x == &name) {
-                    out.push(name);
-                }
-            }
+        cache.insert(members[i].id.clone(), (std::time::Instant::now(), face.clone()));
+        // 镜像到 shared：gateway_status 拼进池成员，前端展示每号模型面
+        if let Ok(mut faces) = state.shared.model_faces.lock() {
+            faces.insert(members[i].id.clone(), face);
         }
     }
-    // 聚合成功写回 GatewayShared：gateway_status（UI 模型列表）同源生效
-    if !out.is_empty() {
-        if let Ok(mut shared) = state.shared.models.lock() {
-            *shared = out.clone();
-        }
-    }
-    out
 }
 
 /// /v1/messages（M4 完整版）：入站 stream=true 时上游 SSE 原样透传（Anthropic 原生客户端

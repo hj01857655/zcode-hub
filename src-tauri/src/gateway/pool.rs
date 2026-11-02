@@ -132,27 +132,46 @@ impl Pool {
                 }
             }
         }
-        for i in 0..n {
-            let idx = (inner.cursor + i) % n;
-            let m = &members[idx];
-            if inner.cool.contains_key(&m.id) {
-                continue;
+        // 两轮扫描（带模型过滤时）：第一轮只收「专号」——模型面确认且仅含请求模型的号
+        //（实测：夜卡号仅 GLM-5.3-Flash，周卡双桶号 5.3+Flash）。Flash 请求优先吃专号，
+        // 把全能号留给 GLM-5.3 这种没有替代选择的请求；专号全忙/冷却才落回第二轮原序。
+        // 模型面未知（None）按万能号进第二轮，不当专号；无模型过滤只扫一轮，行为同旧。
+        let rounds = if model.is_some() { 2 } else { 1 };
+        for pass in 0..rounds {
+            for i in 0..n {
+                let idx = (inner.cursor + i) % n;
+                let m = &members[idx];
+                if inner.cool.contains_key(&m.id) {
+                    continue;
+                }
+                if inner.inflight.get(&m.id).copied().unwrap_or(0) >= MAX_INFLIGHT {
+                    continue;
+                }
+                if !Self::supports(m, model) {
+                    continue;
+                }
+                if pass == 0 && rounds == 2 && !Self::is_dedicated(m, model) {
+                    continue;
+                }
+                *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
+                inner.cursor = idx;
+                // 新选中的号记为该会话的 pin（settle 失败时解除）
+                if let Sticky::Session(sid) = sticky {
+                    inner.sessions.insert(sid.to_string(), (m.id.clone(), Instant::now()));
+                }
+                return Some(idx);
             }
-            if inner.inflight.get(&m.id).copied().unwrap_or(0) >= MAX_INFLIGHT {
-                continue;
-            }
-            if !Self::supports(m, model) {
-                continue;
-            }
-            *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
-            inner.cursor = idx;
-            // 新选中的号记为该会话的 pin（settle 失败时解除）
-            if let Sticky::Session(sid) = sticky {
-                inner.sessions.insert(sid.to_string(), (m.id.clone(), Instant::now()));
-            }
-            return Some(idx);
         }
         None
+    }
+
+    /// 专号判定：模型面确认（Some）且仅含请求模型一个名字——该号除它别无他选，
+    /// 请求它不挤占其他模型的容量。模型面未知或含多模型的号都不是专号。
+    fn is_dedicated(m: &PoolMember, model: Option<&str>) -> bool {
+        match (&m.models, model) {
+            (Some(list), Some(req)) => list.len() == 1 && list[0].eq_ignore_ascii_case(req),
+            _ => false,
+        }
     }
 
     /// 模型路由判定：Some(集合) 必须包含请求模型（大小写不敏感）；None = 模型面未知按万能号放行。
@@ -391,6 +410,31 @@ mod tests {
         pool.settle(&m[i].id, i, m.len(), false, 0, Sticky::None);
         assert!(pool.snapshot(&m)["members"][0]["cooldown_secs"].as_u64().unwrap() >= 599);
         assert!(pool.pick(&m, Sticky::None, None).is_none());
+    }
+
+    #[test]
+    fn dedicated_members_serve_single_model_first() {
+        // 0 号全能（5.3+flash，周卡双桶）、1 号专号（仅 flash，夜卡）。
+        // Flash 请求优先吃专号，全能号留给 GLM-5.3（它没有替代选择）
+        let mut m = members2();
+        m[0].models = Some(vec!["glm-5.3".into(), "glm-5.3-flash".into()]);
+        m[1].models = Some(vec!["glm-5.3-flash".into()]);
+        let pool = Pool::new();
+        assert_eq!(pool.pick(&m, Sticky::None, Some("glm-5.3-flash")).unwrap(), 1);
+        pool.settle(&m[1].id, 1, m.len(), false, 3600, Sticky::None);
+        assert_eq!(pool.pick(&m, Sticky::None, Some("glm-5.3-flash")).unwrap(), 0, "专号冷却才落全能号");
+        pool.settle(&m[0].id, 0, m.len(), true, 0, Sticky::None);
+        assert_eq!(pool.pick(&m, Sticky::None, Some("glm-5.3")).unwrap(), 0, "5.3 只能走全能号");
+        // 全能号也故障冷却后：两个模型都无号可用
+        pool.settle(&m[0].id, 0, m.len(), false, 3600, Sticky::None);
+        assert!(pool.pick(&m, Sticky::None, Some("glm-5.3-flash")).is_none());
+        assert!(pool.pick(&m, Sticky::None, Some("glm-5.3")).is_none(), "全能号冷却 5.3 无家可归");
+        // 无模型过滤不分轮：专号逻辑不干预旧轮转
+        let m2 = members2();
+        let pool2 = Pool::new();
+        let i = pool2.pick(&m2, Sticky::None, None).unwrap();
+        pool2.settle(&m2[i].id, i, m2.len(), true, 0, Sticky::None);
+        assert_eq!(pool2.pick(&m2, Sticky::None, None).unwrap(), i, "粘性驻留不受分轮影响");
     }
 
     #[test]

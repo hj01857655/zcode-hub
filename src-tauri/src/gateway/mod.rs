@@ -17,6 +17,9 @@ pub struct GatewayShared {
     /// 动态模型面（/v1/models 聚合结果；gateway_status 同源读取）。
     /// 初始为静态 MODEL_LIST，聚合成功后被 entitlements 并集覆盖。
     pub models: Mutex<Vec<String>>,
+    /// per-account 模型面镜像（server.rs ensure_model_faces 回写），供 gateway_status 拼进池成员。
+    /// id → None=拉取失败/未拉取（未知），Some(空)=确认无桶，Some(list)=确认模型集
+    pub model_faces: Mutex<std::collections::HashMap<String, Option<Vec<String>>>>,
 }
 impl GatewayShared {
     pub fn model_list(&self) -> Vec<String> {
@@ -66,6 +69,11 @@ impl GatewayShared {
     pub fn snapshot(&self, members: &[pool::PoolMember]) -> serde_json::Value {
         self.pool.snapshot(members)
     }
+
+    /// 号级模型面只读快照，gateway_status 拼进池成员
+    pub fn model_faces(&self) -> std::collections::HashMap<String, Option<Vec<String>>> {
+        self.model_faces.lock().map(|v| v.clone()).unwrap_or_default()
+    }
 }
 pub const LOG_CAP: usize = 200;
 
@@ -97,6 +105,7 @@ impl GatewayState {
                 log: Mutex::new(GatewayShared::load_log_file()),
                 pool: pool::Pool::new(),
                 models: Mutex::new(MODEL_LIST.iter().map(|s| s.to_string()).collect()),
+                model_faces: Mutex::new(std::collections::HashMap::new()),
             }),
         }
     }
