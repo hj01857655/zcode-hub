@@ -2,7 +2,7 @@
 // React 渲染层经 useSyncExternalStore 订阅版本号；emit() 取代原 render()
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, openConfirmModal, openProviderModal } from "../components/ui-bus.js";
+import { toast, openPwModal, openConfirmModal, openProviderModal, openBrowserLoginModal, closeBrowserLoginModal } from "../components/ui-bus.js";
 import { init, t, lang, localeTag, stripErr, syncLang, patchLang } from "./i18n.js";
 import { silentUpdateCheck } from "./updater.js";
 
@@ -508,10 +508,12 @@ export const actions = {
       canSaveLogin: !!st?.live_logged_in && !activeAcc,
       saveLoginTitle: activeAcc ? t("m.saveLoginDisabledTitle", { name: activeAcc.name }) : "",
       onSaveLogin: () => actions.capture(),
-      onPick: async (id) => {
+      onPick: async (id, browser) => {
         try {
-          await invoke("oauth_begin", { provider: id });
-          toast(t("m.loginWindowOpened"), "ok", t("m.loginWindowDetail"));
+          // 登录方式由弹窗 tab 决定（#40）：浏览器 = 外链 + 等待窗；内嵌 = 原有 webview 窗
+          const r = await invoke("oauth_begin", { provider: id, browser });
+          if (browser) openBrowserLoginModal({ url: r.authorize_url || "", provider: id });
+          else toast(t("m.loginWindowOpened"), "ok", t("m.loginWindowDetail"));
         } catch (e) {
           toast(stripErr(e), "err");
         }
@@ -757,12 +759,15 @@ export function wireEvents() {
     const p = ev.payload || {};
     if (p.ok === false) {
       if (p.soft) {
+        // 软失败（误点的 deep link 回调等）：流程还挂着 poll，等待窗不关
         toast(t("m.oauthSoft", { err: p.error || t("m.unknownErr") }), "warn", t("m.oauthSoftDetail"));
         return;
       }
+      closeBrowserLoginModal();
       toast(t("m.oauthFail", { err: p.error || t("m.unknownErr") }), "err");
       return;
     }
+    closeBrowserLoginModal();
     if (p.duplicate) {
       toast(t("m.oauthDup", { name: p.name }), "warn", t("m.oauthDupDetail"));
       return;

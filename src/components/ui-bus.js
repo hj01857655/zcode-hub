@@ -1,6 +1,6 @@
 // UI 状态总线：非组件导出（toast / dismissSplash / open*Modal）单独成模块，
 // 让 ui-react.jsx 只含组件导出，react-plugin 的 Fast Refresh 才不会整文件失效。
-export const ui = { toasts: [], confirm: null, pw: null, provider: null };
+export const ui = { toasts: [], confirm: null, pw: null, provider: null, browserLogin: null };
 let version = 0;
 let toastSeq = 0;
 const listeners = new Set();
@@ -33,3 +33,5 @@ export function openConfirmModal(m) {
 }
 export function openPwModal(m) { ui.pw = m; emit(); }
 export function openProviderModal(m) { ui.provider = m; emit(); }
+export function openBrowserLoginModal(m) { ui.browserLogin = m; emit(); }
+export function closeBrowserLoginModal() { if (ui.browserLogin) { ui.browserLogin = null; emit(); } }

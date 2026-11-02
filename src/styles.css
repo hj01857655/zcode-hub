@@ -1203,6 +1203,51 @@ input:focus-visible,
 .pv-save { margin-top: 8px; }
 .pv-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
 
+/* ---- 系统浏览器登录等待窗（#40） ---- */
+.bl-wait { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-mute); margin-bottom: 10px; }
+.bl-spin {
+  width: 12px; height: 12px; flex: 0 0 auto;
+  border: 2px solid var(--hairline); border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: bl-rot .9s linear infinite;
+}
+@keyframes bl-rot { to { transform: rotate(360deg); } }
+.bl-url {
+  width: 100%; height: 58px; resize: none;
+  background: var(--panel-2); color: var(--ink-mute);
+  border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+}
+.bl-actions { flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* 登录方式 tab（ProviderModal 内，浏览器 / 内嵌窗口二选一） */
+.bl-tabs { display: flex; gap: 6px; margin: 2px 0 10px; }
+.bl-tab {
+  flex: 1; padding: 7px 10px;
+  background: var(--panel-2); color: var(--ink-mute);
+  border: 1px solid var(--hairline); border-radius: 8px;
+  font-size: 13px; cursor: pointer;
+}
+.bl-tab:hover { color: var(--ink); }
+.bl-tab.on {
+  background: transparent; color: var(--amber);
+  border-color: var(--amber); font-weight: 600;
+}
+
+/* ---- 账号拖拽排序（#15） ---- */
+.acc-item { display: flex; align-items: stretch; }
+.acc-item .acc-body { flex: 1; min-width: 0; }
+.acc-grip {
+  flex: 0 0 auto; width: 18px; margin-right: 2px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-mute); opacity: .35;
+  cursor: grab; user-select: none;
+}
+.acc-item:hover .acc-grip { opacity: .8; }
+.acc-grip:active { cursor: grabbing; }
+.acc-item.acc-dragging { opacity: .45; }
+.acc-item.acc-over { box-shadow: inset 0 2px 0 var(--amber); border-radius: 8px; }
+
 /* ---- 关于页：平铺整页，与设置页同语言 ---- */
 .about-wrap {
   flex: 1;

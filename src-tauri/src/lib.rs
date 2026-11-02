@@ -576,7 +576,7 @@ async fn oauth_providers() -> Result<Vec<oauth::OAuthProvider>, String> {
 }
 
 #[tauri::command]
-async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Value, String> {
+async fn oauth_begin(app: AppHandle, provider: String, browser: Option<bool>) -> Result<serde_json::Value, String> {
     if !oauth::OAUTH_PROVIDERS.iter().any(|p| p.id == provider) {
         return Err(i18n::trf("err.oauth.unknown_provider", &[("provider", &provider)]));
     }
@@ -634,6 +634,21 @@ async fn oauth_begin(app: AppHandle, provider: String) -> Result<serde_json::Val
         state: init.state.clone(),
         flow: flow.clone(),
     });
+
+    // 系统浏览器模式（对应上游 #40）：不建内嵌窗，授权链接交给默认浏览器。
+    // 入库只靠 poll 通道（Ready→persist_oauth_account），与窗口无关；
+    // 若浏览器回调触发 zcode:// deep link 也走既有 pending 校验，双通道互斥是安全的。
+    if browser.unwrap_or(false) {
+        if let Err(e) = store::open_url(&url) {
+            let m = i18n::trf("err.oauth.browser", &[("e", &e)]);
+            *pending_oauth_guard() = None;
+            flowlog::log(&flow, "browser-open-fail", &m);
+            return Err(m);
+        }
+        flowlog::log(&flow, "browser-opened", "");
+        spawn_poll_loop(app.clone(), provider.clone(), flow.clone(), mid, poll_cfg);
+        return Ok(json!({ "opened": true, "browser": true, "provider": provider, "authorize_url": url }));
+    }
 
     let login_root = app
         .path()
@@ -707,6 +722,32 @@ fn sweep_login_profiles(root: &std::path::Path) {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
+}
+
+#[tauri::command]
+fn oauth_cancel() -> Result<(), String> {
+    // 浏览器登录弹窗的取消：清 pending 即可，poll 线程下一轮发现 flow 失效自行退出
+    let mut pending = pending_oauth_guard();
+    if let Some(p) = pending.take() {
+        flowlog::log(&p.flow, "cancelled", "browser-cancel");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_account_order(ids: Vec<String>) -> Result<(), String> {
+    let _guard = store_guard();
+    let paths = Paths::detect();
+    // id 仅用于排序匹配，走与 load_account 相同的白名单字符校验，拒收脏数据
+    let cleaned: Vec<String> = ids
+        .into_iter()
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .take(1024)
+        .collect();
+    let mut st = load_settings(&paths);
+    st.account_order = Some(cleaned);
+    save_settings(&paths, &st)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1325,6 +1366,8 @@ pub fn run() {
             referral_bind_cancel,
             oauth_providers,
             oauth_begin,
+            oauth_cancel,
+            set_account_order,
             set_auth_proxy,
             kill_zcode,
             set_behavior,

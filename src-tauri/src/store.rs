@@ -146,6 +146,9 @@ pub struct Settings {
     pub language: Option<String>,
     #[serde(default)]
     pub auto_claim: Option<bool>,
+    /// 用户拖拽后的账号显示顺序（id 列表）；未列出的账号按默认规则排在尾部
+    #[serde(default)]
+    pub account_order: Option<Vec<String>>,
 }
 
 impl Settings {
@@ -527,7 +530,24 @@ pub fn list_accounts(paths: &Paths) -> Result<Vec<Account>, String> {
         }
     }
     out.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.name.cmp(&b.name)));
+    apply_account_order(paths, &mut out);
     Ok(out)
+}
+
+/// 手动排序优先：按 account_order 的位次稳定排序，order 外的账号保持默认序落在尾部。
+/// 位次相同或都不在 order 中时保持原序（sort_by 是稳定排序）。
+fn apply_account_order(paths: &Paths, out: &mut Vec<Account>) {
+    let Some(order) = load_settings(paths).account_order else { return };
+    if order.is_empty() || out.len() < 2 {
+        return;
+    }
+    let rank = |id: &str| order.iter().position(|x| x == id);
+    out.sort_by(|a, b| match (rank(&a.id), rank(&b.id)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
 }
 
 pub fn save_account(paths: &Paths, acc: &Account) -> Result<(), String> {
@@ -1536,4 +1556,57 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
         auth_proxy_url: settings.auth_proxy_url.clone(),
         language: crate::i18n::current().as_str().to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acc(id: &str, created: &str) -> Account {
+        Account {
+            id: id.into(),
+            name: id.into(),
+            created_at: created.into(),
+            updated_at: created.into(),
+            hash: String::new(),
+            credentials: json!({}),
+            config: None,
+            virtual_device_mid: None,
+            virtual_arms_uid: None,
+        }
+    }
+
+    fn tmp_paths(tag: &str) -> Paths {
+        let root = std::env::temp_dir().join(format!("zs-{}-{}", tag, Uuid::new_v4()));
+        Paths { home: root.clone(), data_root: root.clone() }
+    }
+
+    #[test]
+    fn manual_order_first_and_unknown_accounts_fall_to_tail() {
+        let paths = tmp_paths("order");
+        let mut s = Settings::default();
+        s.account_order = Some(vec!["c".into(), "a".into()]);
+        save_settings(&paths, &s).unwrap();
+        // 入参视为 list_accounts 默认序之后的结果
+        let mut v = vec![acc("a", "1"), acc("b", "2"), acc("c", "3"), acc("d", "0")];
+        apply_account_order(&paths, &mut v);
+        let ids: Vec<&str> = v.iter().map(|x| x.id.as_str()).collect();
+        // order 内的按位次提前；order 外的保持原相对序落在尾部（稳定排序）
+        assert_eq!(ids, vec!["c", "a", "b", "d"]);
+        let _ = fs::remove_dir_all(&paths.home);
+    }
+
+    #[test]
+    fn empty_or_missing_order_is_noop() {
+        let paths = tmp_paths("noorder");
+        let mut v = vec![acc("a", "1"), acc("b", "2")];
+        apply_account_order(&paths, &mut v);
+        assert_eq!(v[0].id, "a");
+        let mut s = Settings::default();
+        s.account_order = Some(vec![]);
+        save_settings(&paths, &s).unwrap();
+        apply_account_order(&paths, &mut v);
+        assert_eq!(v[0].id, "a");
+        let _ = fs::remove_dir_all(&paths.home);
+    }
 }

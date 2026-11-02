@@ -189,10 +189,12 @@ function PwModal() {
 function ProviderModal() {
   const u = useUi();
   const m = u.provider;
+  const [tab, setTab] = useState("browser");
   const close = () => { ui.provider = null; emit(); };
 
   useEffect(() => {
     if (!m) return;
+    setTab("browser");
     const onKey = (e) => { if (e.key === "Escape") close(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -204,13 +206,20 @@ function ProviderModal() {
     <div className="pv-mask" onClick={close}>
       <div className="pv-panel" onClick={(e) => e.stopPropagation()}>
         <div className="pv-title">{t("prov.title")}</div>
-        <div className="pv-sub">{t("prov.sub")}</div>
+        <div className="bl-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === "browser"} className={"bl-tab" + (tab === "browser" ? " on" : "")}
+            onClick={() => setTab("browser")}>{t("m.blTabBrowser")}</button>
+          <button role="tab" aria-selected={tab === "embedded"} className={"bl-tab" + (tab === "embedded" ? " on" : "")}
+            onClick={() => setTab("embedded")}>{t("m.blTabEmbedded")}</button>
+        </div>
+        {/* locale 文案含 <br>/<b>，与 cm-desc 同款处理，避免标签原样显示 */}
+        <div className="pv-sub" dangerouslySetInnerHTML={{ __html: t(tab === "browser" ? "m.blTabBrowserSub" : "prov.sub") }} />
         <div className="pv-list">
           {(m.providers || []).map((p) => (
             <button
               key={p.id}
               className="pv-item"
-              onClick={() => { close(); m.onPick?.(p.id); }}
+              onClick={() => { close(); m.onPick?.(p.id, tab === "browser"); }}
             >
               <span className="pv-name">{displayOf(p)}</span>
               <span className="pv-arrow">→</span>
@@ -236,6 +245,60 @@ function ProviderModal() {
   );
 }
 
+// 系统浏览器登录等待窗（#40）：oauth_begin browser=true 打开外链后弹出。
+// 入库靠后端 poll 通道，本窗只做辅助（复制链接/重开浏览器/回退内嵌窗/取消）。
+function BrowserLoginModal() {
+  const u = useUi();
+  const m = u.browserLogin;
+  const [copied, setCopied] = useState(false);
+  const close = () => { ui.browserLogin = null; emit(); };
+
+  useEffect(() => {
+    if (!m) return;
+    const onKey = (e) => { if (e.key === "Escape") { invoke("oauth_cancel").catch(() => {}); close(); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [m]);
+
+  if (!m) return null;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(m.url || ""); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = m.url || ""; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch { /* noop */ }
+      ta.remove();
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 1200);
+  };
+  const fallback = async () => {
+    close();
+    try {
+      await invoke("oauth_begin", { provider: m.provider, browser: false });
+      toast(t("m.loginWindowOpened"), "ok", t("m.loginWindowDetail"));
+    } catch (e) { toast(stripErr(e), "err"); }
+  };
+  const cancel = () => { invoke("oauth_cancel").catch(() => {}); close(); };
+  return (
+    <div className="pv-mask" onClick={cancel}>
+      <div className="pv-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="pv-title">{t("m.browserLoginTitle")}</div>
+        <div className="pv-sub">{t("m.browserLoginSub")}</div>
+        <div className="bl-wait"><span className="bl-spin" aria-hidden="true" /> {t("m.browserLoginWaiting")}</div>
+        <textarea className="bl-url" readOnly value={m.url || ""}
+          onFocus={(e) => e.target.select()} onClick={(e) => e.target.select()} />
+        <div className="pv-actions bl-actions">
+          <button className="btn-ghost" onClick={copy}>{copied ? t("m.browserLoginCopied") : t("m.browserLoginCopy")}</button>
+          <button className="btn-ghost" onClick={() => invoke("open_external", { url: m.url || "" }).catch((e) => toast(stripErr(e), "err"))}>{t("m.browserLoginReopen")}</button>
+          <button className="btn-ghost" onClick={fallback}>{t("m.browserLoginFallback")}</button>
+          <button className="btn-ghost pv-cancel" onClick={cancel}>{t("common.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // 首个 pv-item 自动聚焦（挂载后 DOM 由 React 接管，用事件委托找不到 ref，这里直接查询）
 function ProviderFocus() {
   const u = useUi();
@@ -253,6 +316,7 @@ createRoot(host).render(
     <ConfirmModal />
     <PwModal />
     <ProviderModal />
+    <BrowserLoginModal />
     <ProviderFocus />
   </>,
 );

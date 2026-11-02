@@ -9,6 +9,8 @@ import {
   notchColor, autoPillTitle, accountName,  // eslint-disable-line no-unused-vars
 } from "./lib/store.js";
 import { expireInfo, tierBadges } from "./lib/quotaView.js";
+import { toast } from "./components/ui-bus.js";
+import { stripErr } from "./lib/i18n.js";
 import { AccountQuotaSlot, TierBadges } from "./components/QuotaView.jsx";
 import SettingsPage from "./views/settings.jsx";
 import AboutPage from "./views/about.jsx";
@@ -312,6 +314,8 @@ export default function App() {
   // 池行跳转定位：记住要定位的账号 id，切到账号页后滚动+闪灯
   const [focusAcc, setFocusAcc] = useState(null);
   const [accQuery, setAccQuery] = useState("");
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
   const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
   // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
   const [view, setViewRaw] = useState(() => {
@@ -359,6 +363,21 @@ export default function App() {
   const shownAccs = accQ ? st.accounts.filter((a) => a.name.toLowerCase().includes(accQ) || a.id.toLowerCase().includes(accQ)) : st.accounts;
   const accTotals = quotaTotals(st.accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
 
+  // 拖拽落位（#15）：按全量列表算新序，持久化成功后才改本地，失败回滚为后端序
+  const dropTo = (targetId) => {
+    const from = st.accounts.findIndex((x) => x.id === dragId);
+    const to = st.accounts.findIndex((x) => x.id === targetId);
+    const movedId = dragId;
+    setDragId(null); setOverId(null);
+    if (!movedId || from < 0 || to < 0 || from === to) return;
+    const list = [...st.accounts];
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    invoke("set_account_order", { ids: list.map((x) => x.id) })
+      .then(() => { store.state.accounts = list; emit(); })
+      .catch((e) => toast(stripErr(e), "err"));
+  };
+
   return (
     <div className="shell">
       <SideNav view={view} setView={setView} s={st} unsaved={unsaved} />
@@ -388,13 +407,40 @@ export default function App() {
             ) : null}
             <main className="list" ref={listRef}>
               {st.accounts.length === 0 ? <EmptyState /> : shownAccs.length === 0 ? <div className="dash-empty">{t("m.searchNoMatch")}</div> : shownAccs.map((a) => (
-                <div key={a.id} data-acc={a.id}>
-                  <AccountRow
-                    a={a}
-                    quota={s.acctQuota[a.id]}
-                    plan={s.claimable[a.id]?.plans?.[0] || null}
-                    claimDisabled={claimDisabled}
-                  />
+                <div key={a.id} data-acc={a.id}
+                  className={"acc-item"
+                    + (dragId === a.id ? " acc-dragging" : "")
+                    + (dragId && dragId !== a.id && overId === a.id ? " acc-over" : "")}
+                  draggable={dragId === a.id}
+                  onMouseUp={() => { if (dragId === a.id) setDragId(null); }}
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    try { e.dataTransfer.setData("text/plain", a.id); } catch { /* noop */ }
+                  }}
+                  onDragOver={(e) => { if (dragId && !accQ) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOverId(a.id); } }}
+                  onDrop={(e) => { if (dragId && !accQ) { e.preventDefault(); dropTo(a.id); } }}
+                  onDragEnd={() => { setDragId(null); setOverId(null); }}
+                >
+                  {!accQ && st.accounts.length > 1 ? (
+                    <span className="acc-grip" title={t("m.dragHint")}
+                      onMouseDown={() => setDragId(a.id)}>
+                      <svg width="10" height="14" viewBox="0 0 10 14" aria-hidden="true">
+                        {[3, 7, 11].map((cy) => (
+                          <g key={cy}>
+                            <circle cx="3" cy={cy} r="1.2" /><circle cx="7" cy={cy} r="1.2" />
+                          </g>
+                        ))}
+                      </svg>
+                    </span>
+                  ) : null}
+                  <div className="acc-body">
+                    <AccountRow
+                      a={a}
+                      quota={s.acctQuota[a.id]}
+                      plan={s.claimable[a.id]?.plans?.[0] || null}
+                      claimDisabled={claimDisabled}
+                    />
+                  </div>
                 </div>
               ))}
             </main>
