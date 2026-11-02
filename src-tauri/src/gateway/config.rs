@@ -71,7 +71,9 @@ impl Default for GatewayConfig {
             keepalive_secs: d_keepalive(),
             total_timeout_secs: d_total_timeout(),
             auto_start: false,
-            cors_origins: Vec::new(),
+            // 默认全放行：网关绑 127.0.0.1，空列表会把所有浏览器跨源
+            // （Vite dev 5173 等）的预检全拒掉。要收紧走配置面 cors_origins。
+            cors_origins: vec!["*".to_string()],
             body_limit_mb: d_body_limit(),
             log_to_disk: d_true(),
             log_file_max_mb: d_log_max(),
