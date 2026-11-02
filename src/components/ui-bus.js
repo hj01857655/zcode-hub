@@ -32,6 +32,11 @@ export function openConfirmModal(m) {
   emit();
 }
 export function openPwModal(m) { ui.pw = m; emit(); }
-export function openProviderModal(m) { ui.provider = m; emit(); }
+export function openProviderModal(m) {
+  // 已开着就不重开：连点/双触发会叠出多个弹窗（addAccount 无层守卫的唯一入口防重入点）
+  if (ui.provider) return;
+  ui.provider = m;
+  emit();
+}
 export function openBrowserLoginModal(m) { ui.browserLogin = m; emit(); }
 export function closeBrowserLoginModal() { if (ui.browserLogin) { ui.browserLogin = null; emit(); } }
