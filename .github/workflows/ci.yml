@@ -31,7 +31,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macos hosted runner 长期分配失败（"not acquired by Runner of type hosted"），
+        # 且 CI 只做测试不产出构建物，保留 ubuntu 一条腿即可
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
