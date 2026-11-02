@@ -299,36 +299,47 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
         </header>
       )}
       <section className="settings open">
-        <LangSeg cur={s.language || "zh"} onPick={actions.setLang} />
-        <ThemeSeg cur={theme} onPick={pickTheme} />
-        <label>{t("s.behaviorLabel")}</label>
-        <Toggle on={autostart} label={t("s.autostart")} desc={t("s.autostartDesc")} onClick={actions.toggleAutostart} />
-        <Toggle on={s.launch_after_switch} label={t("s.launchAfter")} desc={t("s.launchAfterDesc")} onClick={() => actions.toggleBehavior("launch")} />
-        <Toggle on={s.close_to_tray} label={t("s.closeTray")} desc={t("s.closeTrayDesc")} onClick={() => actions.toggleBehavior("tray")} />
-        <Toggle on={s.hot_switch} label={t("s.hotSwitch")} desc={t("s.hotSwitchDesc")} onClick={() => actions.toggleBehavior("hot")} />
-        <label style={{ marginTop: 14 }}>{t("s.authLabel")}</label>
-        <Toggle on={s.auth_proxy_on} label={t("s.proxyToggle")} desc={t("s.proxyToggleDesc")} onClick={actions.toggleAuthProxy} />
-        <div className="path-line" style={{ marginTop: 6 }}>
-          <input ref={proxyElRef} className="zcode-path auth-proxy" type="text" value={proxyInput}
-            placeholder={t("s.proxyPh")}
-            onChange={(e) => setProxyInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") actions.saveProxy(); }} />
-          <button className="btn-ghost" onClick={actions.saveProxy}>{t("common.save")}</button>
+        <div className="set-card">
+          <label>{t("s.generalLabel")}</label>
+          <LangSeg cur={s.language || "zh"} onPick={actions.setLang} />
+          <ThemeSeg cur={theme} onPick={pickTheme} />
         </div>
-        <label style={{ marginTop: 14 }}>{t("s.libLabel")}</label>
-        <div className="lib-row">
-          <button className="btn-ghost has-ic" onClick={actions.importFiles}><Ic name="import" size={14} /> {t("s.importBtn")}</button>
-          <button className="btn-ghost has-ic" onClick={actions.exportAll} disabled={!s.accounts.length}><Ic name="exportAll" size={14} /> {t("s.exportAllBtn")}</button>
+        <div className="set-card">
+          <label>{t("s.behaviorLabel")}</label>
+          <Toggle on={autostart} label={t("s.autostart")} desc={t("s.autostartDesc")} onClick={actions.toggleAutostart} />
+          <Toggle on={s.launch_after_switch} label={t("s.launchAfter")} desc={t("s.launchAfterDesc")} onClick={() => actions.toggleBehavior("launch")} />
+          <Toggle on={s.close_to_tray} label={t("s.closeTray")} desc={t("s.closeTrayDesc")} onClick={() => actions.toggleBehavior("tray")} />
+          <Toggle on={s.hot_switch} label={t("s.hotSwitch")} desc={t("s.hotSwitchDesc")} onClick={() => actions.toggleBehavior("hot")} />
         </div>
-        <label style={{ marginTop: 14 }}>{t("s.pathLabel")}</label>
-        <div className="path-line">
-          <input ref={pathElRef} className="zcode-path" type="text" value={pathInput} placeholder="C:\\Program Files\\ZCode\\ZCode.exe"
-            onChange={(e) => setPathInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") actions.savePath(); }} />
-          <button className="btn-ghost" onClick={actions.browsePath}>{t("s.browse")}</button>
-          <button className="btn-ghost" onClick={actions.savePath}>{t("common.save")}</button>
+        <div className="set-card">
+          <label>{t("s.authLabel")}</label>
+          <Toggle on={s.auth_proxy_on} label={t("s.proxyToggle")} desc={t("s.proxyToggleDesc")} onClick={actions.toggleAuthProxy} />
+          <div className="path-line">
+            <input ref={proxyElRef} className="zcode-path auth-proxy" type="text" value={proxyInput}
+              placeholder={t("s.proxyPh")}
+              onChange={(e) => setProxyInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") actions.saveProxy(); }} />
+            <button className="btn-ghost" onClick={actions.saveProxy}>{t("common.save")}</button>
+          </div>
         </div>
-        <div className="hint">{t("s.hint")}</div>
+        <div className="set-card">
+          <label>{t("s.libLabel")}</label>
+          <div className="lib-row">
+            <button className="btn-ghost has-ic" onClick={actions.importFiles}><Ic name="import" size={14} /> {t("s.importBtn")}</button>
+            <button className="btn-ghost has-ic" onClick={actions.exportAll} disabled={!s.accounts.length}><Ic name="exportAll" size={14} /> {t("s.exportAllBtn")}</button>
+          </div>
+        </div>
+        <div className="set-card">
+          <label>{t("s.pathLabel")}</label>
+          <div className="path-line">
+            <input ref={pathElRef} className="zcode-path" type="text" value={pathInput} placeholder="C:\\Program Files\\ZCode\\ZCode.exe"
+              onChange={(e) => setPathInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") actions.savePath(); }} />
+            <button className="btn-ghost" onClick={actions.browsePath}>{t("s.browse")}</button>
+            <button className="btn-ghost" onClick={actions.savePath}>{t("common.save")}</button>
+          </div>
+          <div className="hint">{t("s.hint")}</div>
+        </div>
       </section>
     </>
   );
