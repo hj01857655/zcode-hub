@@ -54,6 +54,11 @@ const ICONS = {
   tokOut: P("M8 9.5v-7") + P("M5 5.5 8 2.5l3 3") + P("M3 13h10"),
   bolt: P("M9.2 1.8 3.8 9.2h3.4l-.9 5 5.9-7h-3.4z"),
   clock: `<circle cx="8" cy="8" r="5.6"/>` + P("M8 4.8V8l2.2 1.6"),
+
+  // 网关页：endpoint 复制、key 显隐
+  copy: `<rect x="5.5" y="5.5" width="8" height="8"/>` + P("M3.5 10.5h-1v-8h8v1"),
+  eye: P("M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8 12.1 12.2 8 12.2 1.5 8 1.5 8z") + `<circle cx="8" cy="8" r="1.8"/>`,
+  eyeOff: P("M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8 12.1 12.2 8 12.2 1.5 8 1.5 8z") + `<circle cx="8" cy="8" r="1.8"/>` + P("M2.5 2.5l11 11"),
 };
 
 export function ic(name, size = 16, cls = "") {

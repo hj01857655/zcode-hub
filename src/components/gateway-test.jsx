@@ -37,6 +37,16 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
   let testBodyParsed = {};
   try { testBodyParsed = JSON.parse(testBody || defaultTestBody()); } catch { /* 非法 JSON：curl 预览退空体 */ }
 
+  // 动态模型面：gateway_status 与 /v1/models 同源（周卡/夜卡 entitlements 并集）
+  const models = status?.models?.length ? status.models : ["GLM-5.3-Flash"];
+
+  // 快捷补丁：解析当前体 → 改字段 → 回写编辑框（非法 JSON 退回默认体）
+  const patchBody = (patch) => {
+    let obj = {};
+    try { obj = JSON.parse(testBody || defaultTestBody()); } catch { obj = JSON.parse(defaultTestBody()); }
+    setTestBody(JSON.stringify({ ...obj, ...patch }, null, 2));
+  };
+
   // Responses 非流式出站取文本：优先 output_text 便捷字段，否则沿 output[].content[].text 拼接
   const responsesText = (rb) => rb?.output_text
     || (Array.isArray(rb?.output)
@@ -153,6 +163,19 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
           <button className={"lang-opt" + (testProto === "responses" ? " on" : "")} onClick={() => { setTestProto("responses"); setTestBody(""); }}>Responses</button>
           <button className={"lang-opt" + (testProto === "anthropic" ? " on" : "")} onClick={() => { setTestProto("anthropic"); setTestBody(""); }}>Messages</button>
         </div>
+        <div className="x-test-quick">
+          <label className="x-test-label" htmlFor="x-test-model-sel">{t("x.testModel")}</label>
+          <select id="x-test-model-sel" className="zcode-path x-test-model"
+            value={testBodyParsed?.model || models[0]}
+            onChange={(e) => patchBody({ model: e.target.value })}>
+            {models.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <label className="x-test-stream-toggle">
+            <input type="checkbox" checked={testBodyParsed?.stream === true}
+              onChange={(e) => patchBody({ stream: e.target.checked })} />
+            <span>{t("x.testStream")}</span>
+          </label>
+        </div>
         <label className="x-test-label">{t("x.testBodyLabel")}</label>
         <textarea className="zcode-path x-test-msg x-test-body" value={testBody || defaultTestBody()}
           onChange={(e) => setTestBody(e.target.value)} rows={10} spellCheck={false} />
@@ -176,6 +199,9 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
                   {(testResult.tin != null || testResult.tout != null)
                     ? ` · ${testResult.tout ?? 0}↑ / ${testResult.tin ?? 0}↓`
                     : ""}
+                  {(testResult.usage?.cache_read_input_tokens != null || testResult.usage?.cache_creation_input_tokens != null)
+                    ? ` · cache ${testResult.usage?.cache_read_input_tokens ?? 0}↺ / ${testResult.usage?.cache_creation_input_tokens ?? 0}+`
+                    : ""}
                 </div>
                 <div className="x-test-text">{testResult.text}</div>
               </div>
@@ -188,7 +214,7 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
                 {testHistory.slice(1).map((h, i) => (
                   <div key={i} className="x-test-hist-row">
                     <span className={"x-test-dot " + (h.ok ? "ok" : "bad")} />
-                    <span className="x-test-hist-ms">{(h.proto === "anthropic" ? "ANT" : "OAI") + (h.stream ? "·SSE" : "")} · {h.ms}ms</span>
+                    <span className="x-test-hist-ms">{({ anthropic: "ANT", responses: "RSP", openai: "OAI" }[h.proto] || h.proto) + (h.stream ? "·SSE" : "")} · HTTP {h.status || "-"} · {h.ms}ms</span>
                     <span className="x-test-hist-text">{h.text.slice(0, 60)}</span>
                   </div>
                 ))}

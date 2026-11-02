@@ -1604,7 +1604,7 @@ input:focus-visible,
   flex-direction: column;
   gap: 6px;
 }
-.x-pool-summary {
+.x-pool-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1809,12 +1809,10 @@ input:focus-visible,
 }
 /* 内层格子不再自带底色/圆角：外层卡片是唯一容器，避免四角顶成直角 */
 .x-ls-group .x-stat {
-  background: none;
-  border-radius: 0;
-  padding: 2px 10px;
+  padding: 2px 8px;
 }
 /* 延迟组格子多（p50/p95/TTFT p50/p95），数值列对齐不跳动 */
-.x-ls-group .x-stat .x-stat-v { min-width: 52px; }
+.x-ls-group .x-stat .x-stat-v { min-width: 46px; }
 .x-ls-group-label {
   display: flex;
   align-items: center;
@@ -1826,17 +1824,14 @@ input:focus-visible,
   border-right: 1px solid var(--hairline-soft);
 }
 .x-stat {
-  display: flex; flex-direction: column;
-  gap: 2px;
-  min-width: 64px;
-  padding: 4px 10px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  display: flex; align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
 }
-.x-stat-v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.x-stat-v { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .x-stat-v.ok { color: var(--mint, #4fbf8b); }
 .x-stat-v.fail { color: var(--red); }
-.x-stat-v small { font-size: 10px; color: var(--ink-mute); margin-left: 2px; font-weight: 400; }
+.x-stat-v small { font-size: 10px; color: var(--ink-mute); margin-left: 1px; font-weight: 400; }
 .x-stat-k { font-size: 10px; color: var(--ink-mute); }
 .x-btn-on { box-shadow: inset 0 0 0 1px var(--mint, #4fbf8b); color: var(--mint, #4fbf8b); }
 /* 展开详情面板：token 徽章行 + 元信息 + req/resp 原文块 */
@@ -2308,6 +2303,16 @@ html[data-theme="light"] {
 }
 .x-proto-seg { width: 100%; }
 .x-proto-seg .lang-opt { flex: 1; }
+/* 快捷行：模型下拉 + 流式开关（改 body 的 model/stream 字段，JSON 编辑框仍是事实源） */
+.x-test-quick { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.x-test-quick label.x-test-label { margin: 0; }
+.x-test-quick .x-test-model { flex: 1; }
+.x-test-stream-toggle {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--ink-dim); cursor: pointer; user-select: none;
+  flex: none;
+}
+.x-test-model { width: 100%; font-family: var(--mono); }
 .x-test-msg { width: 100%; min-height: 72px; resize: vertical; }
 .x-test-body { font-family: Consolas, monospace; font-size: 12px; min-height: 200px; line-height: 1.5; }
 .x-test-out {

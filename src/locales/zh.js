@@ -389,6 +389,8 @@ export const zh = {
   "x.hide": "隐藏",
   "x.apiKeyNow": "当前密钥：",
   "x.copyKey": "复制",
+  "x.showKey": "显示密钥",
+  "x.hideKey": "隐藏密钥",
   "x.copied": "已复制",
   "x.start": "启动服务",
   "x.stop": "停止服务",

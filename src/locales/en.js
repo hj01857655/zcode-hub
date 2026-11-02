@@ -389,6 +389,8 @@ export const en = {
   "x.hide": "hide",
   "x.apiKeyNow": "Current key:",
   "x.copyKey": "Copy",
+  "x.showKey": "Show key",
+  "x.hideKey": "Hide key",
   "x.copied": "Copied",
   "x.start": "Start",
   "x.stop": "Stop",
