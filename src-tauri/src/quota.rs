@@ -20,11 +20,12 @@ fn no_window(prog: &str) -> std::process::Command {
 pub const QUOTA_LIMIT_URL: &str = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 pub const SUBSCRIPTION_URL: &str = "https://open.bigmodel.cn/api/biz/subscription/list";
 pub const BILLING_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
-pub const CLIENT_APP_VERSION: &str = "3.17.1";
+pub const CLIENT_APP_VERSION: &str = "3.17.2";
 
 /// 领取通道版本：曾固定 3.14.0（生态流传防 3012），2026-10-31 实测推翻——
 /// 3.17.1 的头+URL 直打 billing/claim 连续 12 次成功零 3012，版本不敏感。
 /// billing 全链与 touch 统一走探测版本（zcode_app_version），不再保留专用常量。
+/// 探测兜底随 2026-11-02 客户端 3.17.2 更新同步。
 
 pub(crate) fn client_platform() -> String {
     let os = crate::zcrypto::node_platform_for(std::env::consts::OS);

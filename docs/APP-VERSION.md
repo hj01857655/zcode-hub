@@ -31,6 +31,7 @@
 - 2026-10-31：preview 下发与版本头无关（3.14.0/3.16.3/3.17.1 响应逐字节相同）；`billing/claim` 以 3.17.1 头连续 12 个账号全部 200，3.14.0 头一律回 1004——claim/touch 通道要求 3.17.1 真实版本头。删除 `CLAIM_APP_VERSION` 与 `zai_claim_headers_with_mid`，版本源归一至探测值。
 - 2026-11-01：messages 端点版本闸定案——`User-Agent` / `X-ZCode-App-Version` 自报 3.17.1 回 3012/405，自报 3.14.0/3.16.3 均 200；gateway `upstream.rs` 据此以 `SAFE_APP_VERSION` 钉 3.16.3。
 - 2026-11-02：claim 动作端点口径回归钉档——`SAFE_APP_VERSION` 上移 `quota.rs` 成单一来源，新增 `zai_claim_headers_with_mid`（10-31 删的同名机制回归），`submit_claim` 是唯一调用点；`gateway/upstream.rs` 本地常量改引用。实测（三套 TLS 栈一致：ureq/rustls、CPython urllib×3.17.1 与 ×3.16.3 头）：投放内账号 claim 均可达业务层（1003 重复领取 200），非投放账号两档头一律 405/3012——**3012 为账号级反枚举判定，与版本头无归因**；钉 3.16.3 按用户口径执行，与 messages 同代际。
+- 2026-11-03：客户端 3.17.2 发布（2026-11-02 日志），`CLIENT_APP_VERSION` 兜底同步 3.17.2；探测值以注册表实际安装版本为准（未升级机器仍回旧探测值）。3.17.2 与版本闸相关的行为变化未知——升级后需复测 messages 钉档（3.16.3 是否仍 200）与 billing/touch 真实版本头。
 
 ## 维护守则
 
