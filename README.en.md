@@ -49,8 +49,10 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 - **Save / switch accounts**: one-click login switching; the current login is auto-preserved before any switch — accounts are never lost
 - **Add accounts**: OAuth login for new accounts inside the tool (BigModel / z.ai entries), never touching the current login
 - **Quota display**: inline plan quota and reset time per account row, multi-plan grouping; a dashboard page summarizes everything
+- **Eligibility refresh**: one-click refresh per account or batch, with 429 throttle-and-backoff, 60s recently-refreshed skip and per-account failure cooldown — the rate-limit trap is caught at the client layer
+- **Account management**: drag-and-drop ordering, inline row actions (switch / quota / claim / rename / delete), browser / embedded login tabs
 - **Claim promotions**: one-click claim for eligible promotions; "Auto claim" toggle (off by default) checks and claims periodically — manual actions take priority
-- **Local gateway**: OpenAI-compatible reverse proxy that translates any OpenAI SDK request into the ZCode model endpoint protocol (`http://127.0.0.1:8081/v1`); multi-account pool with rotation and cooldown, request logs (raw/JSON/body/SSE views), gateway tuning modal, smoke-test modal (protocol switch / system prompt / parameters / streaming / curl preview); see [docs/GATEWAY.md](docs/GATEWAY.md)
+- **Local gateway**: OpenAI-compatible reverse proxy that translates any OpenAI SDK request into the ZCode model endpoint protocol (`http://127.0.0.1:8081/v1`); multi-account pool with rotation, cooldown and per-account model surface (`/v1/models` aggregated from account entitlements), request logs (raw/JSON/body/SSE views with req_id/TTFT/token-quartet/cost), gateway tuning modal, smoke-test modal (protocol switch / model dropdown / streaming toggle / curl preview); see [docs/GATEWAY.md](docs/GATEWAY.md)
 - **Gateway quick start**:
   ```bash
   # List available models (model surface follows plan entitlements)
