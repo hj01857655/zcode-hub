@@ -48,6 +48,60 @@ function D7(t) {
 
 配套常量：`$7 = "coding_plan_security_verification_required"`（服务端要求验证码的错误码）；`QD = ["X-Aliyun-Captcha-Verify-Param","X-Aliyun-Captcha-Verify-Region"]`（重试时的头白名单）。
 
+## 1.5 preview 通道：桌面端仍在用（修正认知）
+
+`getManualClaimPlanPreviews`（host/index.js）——桌面端手动领取 UI 的数据源之一：
+
+```
+GET /api/v1/zcode-plan/billing/preview?app_version=3.17.2&platform=win32-x64
+鉴权 Authorization: Bearer <credentialService.load("zcodejwttoken")>
+返回 { code, data: { server_time, plans: [{plan_id, name, description, priority, ...}] } }
+```
+
+- 凭据键 `QO = "zcodejwttoken"`（credentialService.load 的 key，claim 同源）；
+- **zsw 侧「preview 恒空、已整体删除」的结论要修正**：恒空是我们在无投放环境实测的表象；桌面端手动领取 UI 把 preview 作为常驻数据源保留。zsw 刷新主路径不打 preview 仍是合理取舍（已知 429 高发端点），但它并非服务端已废弃的通道。
+
+## 1.6 请求验证（security verification）机制
+
+asar `chunk-D5C6W4UB.js`：
+
+```js
+var A_ = ["model-request", "captcha-retry"];   // 需要验证的场景分类
+var $7 = "coding_plan_security_verification_required";  // 服务端要求验证码的错误码
+
+function M7(t) {  // readRequestVerificationConfig：client/configs → 验证配置
+  let n = t?.captcha;
+  if (!n) return null;
+  let { skip_model_request: r, ...i } = n;       // captcha 段字段：sceneId/region/prefix/
+  return { ...i, ...typeof r === "boolean" ? { skipModelRequest: r } : {} };
+}
+```
+
+重试环：请求被服务端判 `$7` → 客户端跑 captcha（预热/交互）→ 拿到 `captchaVerifyParam` → 以 `D7` 头重发原请求。`A_` 的两个场景（模型请求、captcha 重试）都受 `skip_model_request` 配置控制。
+
+## 1.7 touch 响应完整 schema（parseMarketingTouchResponse）
+
+```js
+// 投放壳（r4，resource_position 判别联合）
+{ campaign_id,                      // ← 根字段，与 resource_position 同级（我们的解析✅）
+  priority,                         // int 0-100
+  resource_position: "banner",      // banner 壳
+    banner: { layout, background: {bundle|video|image}, buttons: ≤2, success_popup? }
+  | resource_position: "popup",     // popup 壳（无 banner 前缀）
+    popup: { layout, title, description, hero?, buttons: ≤4 }
+
+// 响应包（i4）
+{ code: 0, data: { server_time, language: "zh-CN"|"en-US", deliveries: ≤32 } }
+
+// 解析（Ahe parseMarketingTouchResponse）：
+//   逐条 safeParse(r4)，失败或 resource_position 重复 → 计入 rejectedCount 丢弃
+//   同一 resource_position 只保留第一条（banner/popup 各一）
+//   返回 { serverTime(×1000), language, deliveries, rejectedCount }
+
+// 按钮 action 类型（e4 判别联合）
+"close" | "open_url" {url} | "claim_zcode_plan" {plan_id} | "navigate" | "copy_text" {text}
+```
+
 ## 2. 完整时序（2026-11-03 19:09:51 那次领取，纯日志还原）
 
 ### 阶段一：host 进程冷启动（领取前 ~11s）
@@ -121,7 +175,7 @@ action_type ∈ ["confirm", "cancel"]    // confirm=领取，cancel=忽略投放
 
 桌面端 `marketing/touch` 的 `seq` 为**模块级递增计数器**（asar：`Xde=0, seq=String(Xde++)`，首查发 0），非固定值。zcode-switch 已对齐（`claim.rs` `TOUCH_SEQ: AtomicU64`，首查 0 递增）。
 
-投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；`preview` 通道恒空（已实测五个已领到的号同样空），领取入口唯一由投放驱动。
+投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；`preview` 通道在无投放环境实测恒空（含五个已领到的号），zsw 刷新主路径不打它——但桌面端手动领取 UI 仍以 preview 为常驻数据源（见 §1.5），两通道并存，preview 非服务端废弃。
 
 ## 6. 桌面端 vs zcode-switch 差异清单（2026-11-03 全部对齐）
 
