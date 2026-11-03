@@ -19,7 +19,7 @@
 | 额度 billing/balance（头 + URL 参数） | `quota.rs:193`（头）、`quota.rs:475/710`（URL） |
 | 探测通道 probe | `probe.rs:194`（URL）、`probe.rs:238`（头） |
 | OAuth（头 + redirect_uri 参数） | `quota.rs:199`、`oauth.rs:25` |
-| 领取 preview（头 + URL 参数） | `claim.rs` `preview_plans`/`preview_once`（`zai_billing_headers_with_mid`，探测值） |
+| 领取可领清单（头 + URL 参数） | `claim.rs` `claimable_plans`/`preview_once`（`zai_billing_headers_with_mid`，探测值）——`billing/preview` 仅在置 `ZSW_CLAIM_PREVIEW` 时才打 |
 | 领取 claim（动作端点） | `claim.rs` `submit_claim`（`zai_claim_headers_with_mid`）——**钉 3.16.3** |
 | 营销投放 marketing/touch（头 + URL） | `claim.rs:266/271`——此端点对 `app_version` 敏感，老版本头返回空 deliveries，探测值天然满足 |
 | 账号切换写回 | `store.rs:910` |

@@ -153,7 +153,10 @@ pub(crate) fn oauth_user_id(home: &Path, creds: &Value) -> Option<String> {
     pick("id").or_else(|| pick("user_id")).map(String::from)
 }
 
-pub fn preview_plans(
+/// 该号当前可领的套餐清单：唯一来源是 `marketing/touch` 投放。
+/// 名字里的 preview 只指 `billing/preview` 这条**默认关闭**的对照通道
+/// （置 `ZSW_CLAIM_PREVIEW` 才打），不是调用本函数就会发那个请求。
+pub fn claimable_plans(
     home: &Path,
     creds: &Value,
     config: Option<&Value>,

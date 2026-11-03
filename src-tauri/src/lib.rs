@@ -288,7 +288,7 @@ async fn claim_preview(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
         let paths = Paths::detect();
         let mid = store::ensure_virtual_device_mid(&paths, &id)?;
         let acc = load_account(&paths, &id)?;
-        claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+        claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -304,7 +304,7 @@ async fn claim_start(
     let paths = Paths::detect();
     let mid = store::ensure_virtual_device_mid(&paths, &id)?;
     let acc = load_account(&paths, &id)?;
-    let plans = claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
+    let plans = claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
     let plan = plans
         .iter()
         .find(|p| p.plan_id == plan_id)
