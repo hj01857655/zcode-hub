@@ -1,6 +1,6 @@
 # ZCode claim 完整流程（claimManualPlan）实锤文档
 
-来源：zcode 桌面端 3.17.2 运行日志（`~/.zcode/v2/logs/2026-11-03.log`，5 次真实领取全程）+ 3.17.2 asar 解包源码（`tools/zcode-asar-3.17.2.9661/out/host/`）。记录日期 2026-11-03。本文是 `claim.rs` 全链路的权威对照。
+来源：zcode 桌面端 3.17.2 运行日志（`~/.zcode/v2/logs/2026-11-03.log`，5 次真实领取全程）+ 3.17.2 asar 解包源码（`tools/zcode-asar-3.17.2.9661/out/host/`）。记录日期 2026-11-03。
 
 ## 1. RPC 形状（claimManualPlan）
 
@@ -20,7 +20,7 @@ HTTP 请求：
 | 版本头 | `X-ZCode-App-Version: 3.17.2`（桌面真实版本，**自述新版也能领取成功**） |
 | 平台头 | `X-Platform: ${process.platform}-${process.arch}` = `win32-x64` |
 | 载荷 | `{"plan_id": "<planId>"}` |
-| 超时 | `timeoutMs: da`（模块常量） |
+| 超时 | 15s（模块常量 `da=15e3`） |
 
 返回双分支：
 
@@ -46,21 +46,21 @@ function D7(t) {
 }
 ```
 
-配套常量：`$7 = "coding_plan_security_verification_required"`（服务端要求验证码的错误码）；`QD = ["X-Aliyun-Captcha-Verify-Param","X-Aliyun-Captcha-Verify-Region"]`（重试时的头白名单）。
+配套常量：`$7 = "coding_plan_security_verification_required"`（服务端要求验证码的错误码）；`QD = ["X-Aliyun-Captcha-Verify-Param","X-Aliyun-Captcha-Verify-Region"]`（重试时的头白名单）。凭据键 `QO = "zcodejwttoken"`。
 
-## 1.5 preview 通道：注册但今日零调用（修正认知）
+## 1.5 preview 通道：注册但今日零调用
 
 `getManualClaimPlanPreviews`（host/index.js）在 asar 里注册了完整实现：
 
 ```
 GET /api/v1/zcode-plan/billing/preview?app_version=3.17.2&platform=win32-x64
-鉴权 Authorization: Bearer <credentialService.load(QO)>   // QO = "zcodejwttoken"
+鉴权 Authorization: Bearer <credentialService.load(QO)>
 返回 { code, data: { server_time, plans: [{plan_id, name, description, priority, ...}] } }
 ```
 
 **但 2026-11-03 全天日志实测：RPC 0 次调用、`billing/preview` HTTP 0 次出现**——5 次真实领取全程（19:08–19:11）都没有走它。`coding-plan-subscription.*` 当天全量 RPC 清单：getEnterprisePricing ×127、getStaticTeamProducts ×84、getBillingDiscount ×30、getDynamicWorkflowClientConfig ×27、getStaticProducts ×18、getRequestVerificationConfig ×12、claimManualPlan ×5——**无 preview**。
 
-结论：handler 注册 ≠ 实际调用。桌面端领取链路的前置数据源**唯一是 touch.query**，preview 注册在那属于某个当日未触发的 UI 面（疑似订阅页）。zsw「刷新主路径不打 preview」的设计与桌面实测行为完全一致。
+结论：handler 注册 ≠ 实际调用。桌面端领取链路的前置数据源**唯一是 touch.query**；preview 注册在那属于某个当日未触发的 UI 面。
 
 ## 1.6 请求验证（security verification）机制
 
@@ -84,7 +84,7 @@ function M7(t) {  // readRequestVerificationConfig：client/configs → 验证�
 
 ```js
 // 投放壳（r4，resource_position 判别联合）
-{ campaign_id,                      // ← 根字段，与 resource_position 同级（我们的解析✅）
+{ campaign_id,                      // ← 根字段，与 resource_position 同级
   priority,                         // int 0-100
   resource_position: "banner",      // banner 壳
     banner: { layout, background: {bundle|video|image}, buttons: ≤2, success_popup? }
@@ -172,38 +172,35 @@ action_type ∈ ["confirm", "cancel"]    // confirm=领取，cancel=忽略投放
 - `campaign_id` 来自投放壳（touch deliveries）根字段；
 - 形状为遥测埋点：失败不影响领取结果（桌面端亦然——claim 与 report 是两个独立 RPC）。
 
-## 5. touch 查询的 seq 语义
+## 5. touch 查询的形状与 seq 语义
 
-桌面端 `marketing/touch` 的 `seq` 为**模块级递增计数器**（asar：`Xde=0, seq=String(Xde++)`，首查发 0），非固定值。zcode-switch 已对齐（`claim.rs` `TOUCH_SEQ: AtomicU64`，首查 0 递增）。
+请求（桌面端完整形状）：
 
-投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；`preview` 通道今日 5 次领取零调用（见 §1.5），领取链路的前置数据源唯一是 touch.query——zsw 主路径不打 preview 与桌面实测行为一致。
+```
+GET /api/v1/marketing/touch?seq=<递增计数器，首查 0>
+头：X-Device-Mid + X-Client-Language + X-ZCode-App-Version + Authorization Bearer
+URL 仅带 seq；版本/平台只在头里
+身份守卫：响应后重取 context 比对 scope，变更则抛 marketing_identity_changed
+```
 
-## 6. 桌面端 vs zcode-switch 差异清单（2026-11-03 全部对齐）
+- `seq` 为**模块级递增计数器**（asar：`Xde=0, seq=String(Xde++)`，首查发 0），非固定值；
+- 投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；
+- 查询上下文（asar `createMarketingTouchService` 的 `r(o)`）：每请求前解析 token/deviceMid/locale 组装头，token 或 mid 变化即重建 scope。
 
-| 项 | 桌面端 | zcode-switch | 状态 |
-|---|---|---|---|
-| 鉴权 | Bearer | Bearer（`claim_token`） | ✅ |
-| captcha 头 | param 恒发 + region 条件 | 同（`submit_claim`） | ✅ |
-| 版本头 | 真实版本 3.17.2 | 钉 3.16.3（SAFE，动作端点定案） | ✅ 有意差异 |
-| 领取后 report | touch/action confirm | `touch_report`（`29bf710`） | ✅ 已对齐 |
-| touch seq | 递增计数器 | `TOUCH_SEQ: AtomicU64`（`29bf710`） | ✅ 已对齐 |
-| failureEndsAt | 任意失败码回读 ends_at | `claim_error` 无条件回读（`f1659f3`） | ✅ 已对齐 |
-| captcha 预热 | host 启动即预热，全程驻留 | 每次领取开新窗冷启动 | ⚠️ 结构性差异，无痕单轮超时已放宽至 12s（`d0c5e03`） |
-
-## 7. 风控相关实测结论（同日）
+## 6. 风控相关实测结论（同日）
 
 - **3012 拦截维度 = 账号是否有套餐资格**：14 号全测，10 个有套餐号全 3012、3 个裸号全 200（零例外），与版本头 / 出口 IP / body 形状无关；
 - 桌面端当天自身请求零拦截（billing/claim、touch、balance 全正常）——桌面完整头族 + host 网络栈是可信形状；
 - 裸号 200 空 reply = 上游接受但无额度可路由；
 - 批次投放池全局共享先到先得（1103 批开放后 3 分钟内被抢空），`deliveries` 为空属池耗尽而非版本/形状问题。
 
-## 8. 完整链路总图（端到端）
+## 7. 完整链路总图（端到端）
 
 ```
 ① 发现可领（touch 轮询，稳态 ~2 次/小时）
    GET /api/v1/marketing/touch?seq=<递增，首查 0>
    头：X-Device-Mid + X-Client-Language + X-ZCode-App-Version + Authorization Bearer
-   注意：桌面端 URL 只带 seq，版本/平台只在头里（zsw 额外带 query 参数，服务端兼容）
+   URL 仅带 seq；版本/平台只在头里
    响应 ≤32 deliveries，parse 按 resource_position 去重（banner/popup 各保留一条）
    可领判定：buttons[].action.type == "claim_zcode_plan"（args.plan_id）
 
@@ -225,21 +222,10 @@ action_type ∈ ["confirm", "cancel"]    // confirm=领取，cancel=忽略投放
 ⑤ 后置链
    成功：POST /marketing/touch/action {campaign_id, action_type:"confirm"}
         → touch.query（确认投放清空）→ billing/balance → getEntitlementSnapshot
-   失败：任意码回读 data.plan.ends_at → failureEndsAt（前端冷却展示）
+   失败：任意码回读 data.plan.ends_at → failureEndsAt（冷却展示）
         被判 security_verification_required → 回到 ③ 重试
 
-⑥ 错误码族（zsw failure_message 映射）
+⑥ 错误码族
    401（无凭据）/ 1001–1005（业务态，1005=计划期内重复领取）/ 3001、3007 / -1（网络/解析）
-   服务器 msg 优先展示，本地文案兜底
+   服务器 msg 优先展示
 ```
-
-### zsw ↔ 桌面 步骤映射
-
-| 桌面端 | zcode-switch | 备注 |
-|---|---|---|
-| touch.query（marketing-touch.query RPC） | `claim.rs touch_plans`（TOUCH_SEQ 递增） | seq 对齐 |
-| getRequestVerificationConfig | `claim_captcha_config` / `fetch_captcha_config` | 同源 client/configs |
-| captcha SDK（渲染层预热+无痕） | `src/captcha.js`（独立窗口，无痕+人工兜底） | 预热差异，见 §6 |
-| claimManualPlan | `claim.rs submit_claim` | 头/载荷/双分支返回全对齐 |
-| marketing-touch.report | `claim.rs touch_report`（confirm） | `29bf710` |
-| balance/snapshot 刷新 | `claim_refresh`（touch 单通道，preview 默认关） | §1.5 |
