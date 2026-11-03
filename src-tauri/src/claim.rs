@@ -128,12 +128,9 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-pub const EVENT_REPORT_URL: &str = "https://zcode.z.ai/api/v1/event/report";
-pub const ACTIVATION_EVENTS: [&str; 2] = ["app_launch", "app_daily_active"];
-const SCREEN_RESOLUTION: &str = "2560x1440";
-const ACTIVATION_TIMEOUT_SECS: u64 = 10;
-
-pub(crate) fn telemetry_user_id(home: &Path, creds: &Value) -> Option<String> {
+/// 账号的 user id（来自 oauth user_info 快照）。缺它说明快照不完整（旧版保存的登录），
+/// UI 据此标「需重新登录」。
+pub(crate) fn oauth_user_id(home: &Path, creds: &Value) -> Option<String> {
     let secret = zcrypto::default_secret(home);
     let provider = creds
         .get("oauth:active_provider")
@@ -154,65 +151,6 @@ pub(crate) fn telemetry_user_id(home: &Path, creds: &Value) -> Option<String> {
             .filter(|s| !s.is_empty())
     };
     pick("id").or_else(|| pick("user_id")).map(String::from)
-}
-
-fn activation_event_body(element: &str, event_id: &str, user_id: &str, mid: &str) -> Value {
-    serde_json::json!({
-        "event_id": event_id,
-        "client_timezone": quota::client_timezone(),
-        "client_language": quota::ZCODE_LANG,
-        "element_name": element,
-        "event_region": "app",
-        "event_type": "view",
-        "event_text": "",
-        "event_extra_detail": {},
-        "user_id": user_id,
-        "screen_resolution": SCREEN_RESOLUTION,
-        "app_version": quota::zcode_app_version(),
-        "device_os_category": device_os_category(),
-        "device_os_version": quota::os_version().unwrap_or_default(),
-        "device_mid": mid,
-        "mac_id": "",
-        "marketing_params": "{}",
-    })
-}
-
-fn device_os_category() -> &'static str {
-    match std::env::consts::OS {
-        "windows" => "windows",
-        "macos" => "macos",
-        _ => "linux",
-    }
-}
-
-pub fn report_activation_events(user_id: &str, device_mid: &str) -> Result<(), String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(ACTIVATION_TIMEOUT_SECS))
-        .build();
-    for element in ACTIVATION_EVENTS {
-        let body = activation_event_body(
-            element,
-            &uuid::Uuid::new_v4().to_string(),
-            user_id,
-            device_mid,
-        );
-        let resp = agent
-            .post(EVENT_REPORT_URL)
-            .set("Content-Type", "application/json")
-            .send_json(body)
-            .map_err(|e| {
-                crate::i18n::trf("err.claim.activate_req", &[("e", http_err("", e).trim())])
-            })?
-            .into_string()
-            .map_err(|e| crate::i18n::trf("err.claim.activate_req", &[("e", &e.to_string())]))?;
-        let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
-        let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-        if code != 0 {
-            return Err(failure_message(code, &v));
-        }
-    }
-    Ok(())
 }
 
 pub fn preview_plans(

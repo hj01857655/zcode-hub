@@ -1532,7 +1532,7 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
             updated_at: a.updated_at.clone(),
             is_active: live_hash.as_deref() == Some(a.hash.as_str()),
             has_config: a.config.is_some(),
-            has_user_info: crate::claim::telemetry_user_id(&paths.home, &a.credentials).is_some(),
+            has_user_info: crate::claim::oauth_user_id(&paths.home, &a.credentials).is_some(),
             jwt_expired: account_jwt_expired(&a.credentials, &paths.home),
             identity: zcrypto::account_identity(&a.credentials, &paths.home),
         })

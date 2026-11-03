@@ -251,7 +251,7 @@ async function sweepTick() {
 // 批量跳过判定：登录令牌已过期 / 快照缺资格登录信息的号刷了必失败，批量操作前剔除
 const skipReason = (a) => (a?.jwt_expired ? t("btn.jwtExpired") : a?.has_user_info === false ? t("btn.relogin") : null);
 
-// 有界并发批量刷新资格：claim_refresh 每号独立、跑 blocking 线程池无共享锁。
+// 有界并发批量刷新资格：claim_preview 每号独立、跑 blocking 线程池无共享锁。
 // 并发档位与 sweep / 邀请页同款（4 + 800ms 错峰）
 async function refreshClaimBatch(ids, chunkGapMs, onOne) {
   const CONCURRENCY = 4;
@@ -293,8 +293,8 @@ async function autoClaimTick() {
       if (!accIds().some((a) => a.id === id)) return;
       store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
       try {
-        const r = await invoke("claim_refresh", { id });
-        store.claimable[id] = { plans: r.plans || [], err: null, busy: false };
+        const plans = (await invoke("claim_preview", { id })) || [];
+        store.claimable[id] = { plans, err: null, busy: false };
       } catch (e) {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
@@ -616,12 +616,12 @@ export const actions = {
     }
   },
 
-  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_refresh = 激活事件 + preview/touch），
+  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_preview = preview + touch 并集），
   // 但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
   async refreshClaimOne(id) {
     if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
     if (store.claimable[id]?.busy) return;
-    // 与批量同口径：60s 内刷过的号不再打 activation（写端点，叠加请求撞风控）
+    // 与批量同口径：60s 内刷过的号不再重查（叠加请求撞风控）
     if (Date.now() - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS) {
       const n = Math.ceil((Date.now() - (store.claimable[id]?.refreshedAt || 0)) / 1000);
       toast(t("m.refreshFreshSkip", { name: accountName(id), n }), "warn");
@@ -632,16 +632,10 @@ export const actions = {
     refreshOneBusy = true;
     emit();
     try {
-      const r = await invoke("claim_refresh", { id });
-      const plans = r.plans || [];
+      const plans = (await invoke("claim_preview", { id })) || [];
       store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
-      // 0 个可领要给原因：缺登录信息（资格链路断）与「活动没开放/已领完」是两回事
-      if (r.activationError) {
-        toast(t("m.refreshClaimAcctErr", { name, err: stripErr(r.activationError) }), "warn");
-      } else if (plans.length) {
+      if (plans.length) {
         toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
-      } else if (!r.activated) {
-        toast(t("m.refreshClaimNoLogin", { name }), "warn", t("m.refreshClaimNoLoginDetail"));
       } else {
         toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail"));
       }
@@ -657,10 +651,10 @@ export const actions = {
   async refreshClaim() {
     const accounts = store.state?.accounts || [];
     const now0 = Date.now();
-    // 失败号复用自动领取的冷却表：冷却期内重试必然同码失败，白打请求还多送遥测
+    // 失败号复用自动领取的冷却表：冷却期内重试必然同码失败，白打请求
     const cooled = (id) => (autoClaimCooldown[id] ?? 0) > now0;
-    // per-id 新近已刷新跳过：60s 内刷过的号（refreshedAt）批量时不再打 claim_refresh
-    // ——activation 是写端点，叠加请求就是领取链 429→3012 的同款场景
+    // per-id 新近已刷新跳过：60s 内刷过的号（refreshedAt）批量时不再重查
+    // ——叠加请求就是领取链 429→3012 的同款场景
     const fresh = (id) => now0 - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS;
     // 已有可领套餐的号批量时跳过：重查对界面无增益，touch 投放波动返回空 deliveries 时
     // 整体覆盖写回会把正在展示的可领条顶掉；要验证某个套餐是否还在用单号刷新（真实覆盖）
@@ -720,10 +714,9 @@ export const actions = {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
         emit();
         try {
-          const r = await invoke("claim_refresh", { id });
-          store.claimable[id] = { plans: r.plans || [], err: null, busy: false, refreshedAt: Date.now() };
-          if ((r.plans || []).length) okCount++;
-          if (r.activationError) failBits.push(`${name}: ${stripErr(r.activationError)}`);
+          const plans = (await invoke("claim_preview", { id })) || [];
+          store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
+          if (plans.length) okCount++;
         } catch (e) {
           store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
           failBits.push(`${name}: ${stripErr(e)}`);

@@ -294,36 +294,6 @@ async fn claim_preview(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
     .map_err(|e| e.to_string())?
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaimRefreshResult {
-    plans: Vec<claim::ClaimPlan>,
-    activated: bool,
-    activation_error: Option<String>,
-}
-
-#[tauri::command]
-async fn claim_refresh(id: String) -> Result<ClaimRefreshResult, String> {
-    // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = Paths::detect();
-        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
-        let acc = load_account(&paths, &id)?;
-        let (activated, activation_error) =
-            match claim::telemetry_user_id(&paths.home, &acc.credentials) {
-                Some(uid) => match claim::report_activation_events(&uid, &mid) {
-                    Ok(()) => (true, None),
-                    Err(e) => (false, Some(e)),
-                },
-                None => (false, None),
-            };
-        let plans = claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))?;
-        Ok(ClaimRefreshResult { plans, activated, activation_error })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
 async fn claim_start(
     app: AppHandle,
@@ -1355,7 +1325,6 @@ pub fn run() {
             get_live_quota,
             get_account_quota,
             claim_preview,
-            claim_refresh,
             claim_start,
             claim_captcha_config,
             claim_captcha_submit,
