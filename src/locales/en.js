@@ -438,6 +438,7 @@ export const en = {
   "c.cfgUnavailable": "Verification config unavailable",
   "c.cfgUnavailableDetail": "The event may have ended — refresh in the main window and retry",
   "c.traceless": "Running traceless verification…",
+  "c.tracelessRetry": "Traceless check failed — retrying {n}/{max}…",
   "c.passed": "Verification passed — submitting…",
   "c.submitFail": "Submit failed",
   "c.interactive": "Manual verification needed — click the button below",

@@ -1004,8 +1004,11 @@ fn spawn_poll_loop(app: AppHandle, provider: String, flow: String, mid: String, 
 
 fn open_captcha_window(app: &AppHandle, auto: bool) -> Result<(), String> {
     let (w, h) = (380.0, 320.0);
+    // 无痕失败是否重试由页面自己判（auto = 隐藏窗，重试用户无感知），模式随 URL 走；
+    // 复用已有窗口时不能 reload——reload 会带上一次的 query，手动转 auto 会丢掉重试能力
+    let page = if auto { "captcha.html?auto=1" } else { "captcha.html" };
     if let Some(win) = app.get_webview_window("captcha") {
-        let _ = win.eval("location.reload()");
+        let _ = win.eval(&format!("location.replace({page:?})"));
         center_over_main(app, &win, w, h);
         if auto {
             let _ = win.hide();
@@ -1018,7 +1021,7 @@ fn open_captcha_window(app: &AppHandle, auto: bool) -> Result<(), String> {
     let win = tauri::WebviewWindowBuilder::new(
         app,
         "captcha",
-        tauri::WebviewUrl::App("captcha.html".into()),
+        tauri::WebviewUrl::App(page.into()),
     )
     .title(i18n::tr("title.captcha"))
     .theme(Some(tauri::Theme::Dark))

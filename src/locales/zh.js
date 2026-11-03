@@ -438,6 +438,7 @@ export const zh = {
   "c.cfgUnavailable": "验证配置不可用",
   "c.cfgUnavailableDetail": "活动可能已结束，请回主窗口刷新后重试",
   "c.traceless": "正在无感验证…",
+  "c.tracelessRetry": "无感验证未通过，自动重试 {n}/{max}…",
   "c.passed": "验证通过，正在提交…",
   "c.submitFail": "提交失败",
   "c.interactive": "需要人工验证，请点击下方按钮",

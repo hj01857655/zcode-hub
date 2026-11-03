@@ -161,24 +161,30 @@ pub fn preview_plans(
 ) -> Result<Vec<ClaimPlan>, String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    let url = format!(
-        "{BILLING_PREVIEW_URL}?app_version={}&platform={}",
-        quota::zcode_app_version(),
-        quota::client_platform()
-    );
-    // 官方领取入口由营销投放驱动，preview 只是副通道：preview 坏了不连坐，
-    // 但 touch 只发一次（两路都要用它）
     let touch = touch_plans(&token, device_mid.clone());
-    let preview_err;
-    let mut base = match preview_once(&url, &token, device_mid) {
-        Ok(p) => p,
-        Err(e) => {
-            preview_err = e;
-            match &touch {
-                Ok(t) if !t.is_empty() => t.clone(),
-                _ => return Err(preview_err),
+    // 50 §3 实测 preview 恒空（五个已领到的号也一样空），领取入口唯一由投放驱动，
+    // 所以主路径不打 preview：每次刷新白送一个必死请求，preview 还是已知会 429 的端点。
+    // 要拿 preview 做归因对照时置 ZSW_CLAIM_PREVIEW=1 恢复副通道（坏了同样不连坐）。
+    let preview_on = std::env::var("ZSW_CLAIM_PREVIEW").is_ok();
+    let mut base = if preview_on {
+        let url = format!(
+            "{BILLING_PREVIEW_URL}?app_version={}&platform={}",
+            quota::zcode_app_version(),
+            quota::client_platform()
+        );
+        let preview_err;
+        match preview_once(&url, &token, device_mid) {
+            Ok(p) => p,
+            Err(e) => {
+                preview_err = e;
+                match &touch {
+                    Ok(t) if !t.is_empty() => t.clone(),
+                    _ => return Err(preview_err),
+                }
             }
         }
+    } else {
+        vec![]
     };
     // touch 通道失败时「无投放」的结论不可信（429/网络错都会被当成空 deliveries）：
     // preview 确认空而 touch 又坏了 → 报错让前端走 catch 保留既有可领条，
@@ -208,8 +214,11 @@ pub fn preview_plans(
     Ok(base)
 }
 
-/// 营销触点投放：`deliveries[].banner.buttons[].action.type == "claim_zcode_plan"`
-/// 才是「该号当前可领」的权威信号（实测 preview 恒空，五个已领到的号也一样空）。
+/// 营销触点投放：`buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的
+/// 权威信号（实测 preview 恒空，五个已领到的号也一样空）。
+/// 投放壳有两种（60 §3）：`resource_position` = `"banner" | "popup"`，按钮与权益分别挂在
+/// `banner` 子壳与投放根上，所以两处都要扫——只认 banner 的话，服务端改用 popup 投领取卡
+/// 会被静默漏掉。
 /// 此端点对 app_version 敏感——老版本头（如 3.14.0）实测返回空 deliveries，必须走真实客户端版本头。
 /// 投放按 mid + 账号双重分配，mid 用该号自己的。
 /// 失败一律 Err 上抛而非吞成空列表：调用方要区分「确认无投放」和「这次没查着」，
@@ -238,33 +247,41 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
         .ok_or_else(|| crate::i18n::tr("err.claim.touch_shape"))?;
     let mut out: Vec<ClaimPlan> = vec![];
     for d in &dels {
-        let wanted: Vec<String> = d
-            .pointer("/banner/buttons")
-            .and_then(|b| b.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|b| {
-                        let act = b.get("action")?;
-                        if act.get("type").and_then(|t| t.as_str()) != Some("claim_zcode_plan") {
-                            return None;
-                        }
-                        act.get("args")
-                            .and_then(|a| a.get("plan_id").or_else(|| a.get("planId")))
-                            .and_then(|p| p.as_str())
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut wanted: Vec<String> = vec![];
+        for node in [d.get("banner"), Some(d)].into_iter().flatten() {
+            let Some(arr) = node.get("buttons").and_then(|b| b.as_array()) else {
+                continue;
+            };
+            for plan_id in arr.iter().filter_map(|b| {
+                let act = b.get("action")?;
+                if act.get("type").and_then(|t| t.as_str()) != Some("claim_zcode_plan") {
+                    return None;
+                }
+                act.get("args")
+                    .and_then(|a| a.get("plan_id").or_else(|| a.get("planId")))
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            }) {
+                if !wanted.contains(&plan_id) {
+                    wanted.push(plan_id);
+                }
+            }
+        }
         if wanted.is_empty() {
             continue;
         }
         // bundle.args.zcode_plan 与 preview 的 plan 同构，带 entitlements/priority。
         // 实测结构：background = { bundle:{src}, entry, args:{zcode_plan} } —— args 与 bundle 同级
-        let zp = d
-            .pointer("/banner/background/args/zcode_plan")
-            .or_else(|| d.pointer("/banner/background/bundle/args/zcode_plan"));
+        // popup 壳没有 banner 前缀，四条路径按存在取第一条
+        let zp = [
+            "/banner/background/args/zcode_plan",
+            "/banner/background/bundle/args/zcode_plan",
+            "/background/args/zcode_plan",
+            "/background/bundle/args/zcode_plan",
+        ]
+        .iter()
+        .find_map(|p| d.pointer(p));
         let mut matched = false;
         if let Some(p) = zp {
             let pid = p

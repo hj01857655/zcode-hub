@@ -6,6 +6,11 @@ import { init, t, lang, stripErr } from "./lib/i18n.js";
 
 const SDK_URL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js";
 const TRACELESS_TIMEOUT = 8000;
+// 无痕验证实测成功率 ≈ 1/2，靠重试兜底（2.3）。auto（隐藏窗静默领取）模式下
+// 失败重试 2 次：3 轮 × 8s = 24s，在 auto 等待窗口 AUTO_CLAIM_WAIT_MS 45s 内。
+// 手动模式不重试 —— 用户对着弹窗等 24 秒不如立刻看到按钮。
+const AUTO_RETRY_MAX = 2;
+const isAuto = new URLSearchParams(location.search).get("auto") === "1";
 
 const $text = document.getElementById("cap-text");
 const $detail = document.getElementById("cap-detail");
@@ -41,6 +46,8 @@ function loadSdk() {
 let submitted = false;
 let region = null;
 let tracelessTimer = 0;
+let tracelessRound = 0;
+let captchaInstance = null;
 
 async function run() {
   try {
@@ -103,6 +110,22 @@ async function run() {
     if (why) detail(typeof why === "string" ? why.slice(0, 120) : JSON.stringify(why).slice(0, 120));
   };
 
+  // 无痕失败先重试、重试耗尽才转人工（超时与 fail/onError 同走这条路）
+  const retryOrFail = (why) => {
+    clearTimeout(tracelessTimer);
+    if (isAuto && !submitted && tracelessRound < AUTO_RETRY_MAX
+        && typeof captchaInstance?.startTracelessVerification === "function") {
+      tracelessRound++;
+      try {
+        captchaInstance.startTracelessVerification();
+        status(t("c.tracelessRetry", { n: tracelessRound, max: AUTO_RETRY_MAX }));
+        tracelessTimer = setTimeout(() => retryOrFail(), TRACELESS_TIMEOUT);
+        return;
+      } catch { /* SDK 拒绝重入：落人工 */ }
+    }
+    interactive(why);
+  };
+
   try {
     window.initAliyunCaptcha({
       SceneId: cfg.scene_id,
@@ -112,16 +135,17 @@ async function run() {
       element: "#cap-holder",
       button: "#cap-btn",
       getInstance: (instance) => {
+        captchaInstance = instance;
         if (typeof instance.startTracelessVerification === "function") {
           instance.startTracelessVerification();
-          tracelessTimer = setTimeout(interactive, TRACELESS_TIMEOUT);
+          tracelessTimer = setTimeout(() => retryOrFail(), TRACELESS_TIMEOUT);
         } else {
           interactive();
         }
       },
       success: (param) => submit(typeof param === "string" ? param : param?.captchaVerifyParam),
-      fail: (p) => interactive(p),
-      onError: (p) => interactive(p),
+      fail: (p) => retryOrFail(p),
+      onError: (p) => retryOrFail(p),
     });
   } catch (e) {
     notifyStuck();
