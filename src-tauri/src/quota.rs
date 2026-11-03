@@ -202,19 +202,20 @@ pub(crate) fn zai_billing_headers(token: &str) -> Vec<(String, String)> {
 pub(crate) fn zai_billing_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
     zai_headers_with_version(zcode_app_version(), token, mid)
 }
-/// 写端点（动作类）统一钉档：
-/// - claim/messages：3.17.x 自述触发严格 bot 检查（3012/405），必须钉低版本——
-///   header_bisect.py 实锤 3.16.3 全头族 12 连成功零拦截，撞风控再降 3.14.0；
-/// - 读取通道（touch/balance/OAuth）**不**用本档：投放按 app_version 过滤，钉低档会把
-///   在线投放整体滤空（2026-11-03 14 号 × 3 档版本头对照实测，见 zcode_app_version 注释）。
-///   旧注释「读取通道版本不敏感」是投放未上线时间窗做的对照，两侧都空导致的误判，已订正。
-/// 统一钉 3.16.3：所有通道行为可复现，排查少一个变量；注册表探测链保留不删
-///（归因实验时可用 ZCODE_GATEWAY_APP_VERSION 类覆盖读回真实值）。
-pub(crate) const SAFE_APP_VERSION: &str = "3.16.3";
-
+/// 领取与投放动作（billing/claim、marketing/touch/action）版本头策略（2026-11-03 订正）：
+/// 跟投放读取通道同版本（`zcode_app_version()` 探测值）——投放按 app_version 过滤，
+/// 领取必须用同一个自述版本，否则服务端视为「该档客户端无此投放」直接 1004。
+/// 10-31 已有 A/B 实锤：3.17.1 头连续 12 号全部 200，3.14.0 头一律 1004；11-02 的
+/// 「动作端点一律降档」是预防性口径（当时无对照数据），已被 11-03 现象推翻。
+/// gateway messages 仍单独钉 `SAFE_APP_VERSION`（WAF 对 3.17.x 自述的动作类对话判 3012/405，
+/// 与领取资格闸是两个不同的闸），撞风控自动降级见 `gateway::upstream::note_risk_response`。
 pub(crate) fn zai_claim_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
-    zai_headers_with_version(SAFE_APP_VERSION.into(), token, mid)
+    zai_headers_with_version(zcode_app_version(), token, mid)
 }
+
+/// 仅 gateway messages 通道取用（领取链已改随探测值，见 `zai_claim_headers_with_mid`）；
+/// 撞风控自动降到 3.14.0（`gateway::upstream::FALLBACK_APP_VERSION`）。
+pub(crate) const SAFE_APP_VERSION: &str = "3.16.3";
 
 pub(crate) struct OAuthFlowHeaders(pub Vec<(String, String)>);
 

@@ -329,7 +329,8 @@ pub fn submit_claim(
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
     let mut req = agent().post(BILLING_CLAIM_URL);
-    // claim 是动作端点，走钉死的 SAFE 版本头（见 quota::SAFE_APP_VERSION）；投放通道不受影响
+    // 领取版本头跟投放读取通道同档（探测值）：投放按 app_version 过滤，
+    // 低一档自述会被服务端当「该档无此投放」→ 1004。详见 quota::zai_claim_headers_with_mid
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
         req = req.set(&k, &v);
     }

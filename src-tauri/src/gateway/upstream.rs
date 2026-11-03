@@ -22,8 +22,9 @@ impl std::fmt::Display for UpstreamError {
 /// scripts/header_bisect.py + version_family_bisect.py）；≤3.16.3 放行（3.14.0 两条、
 /// 全头族 3.16.3 均实测 200）。故整套官方头族回归、版本钉死 3.16.3——与 body 主线
 /// 前缀同版本代际。版本号可用 ZCODE_GATEWAY_APP_VERSION 覆盖做归因实验；
-/// touch/preview 投放通道仍走 quota.rs 的注册表真实探测（那边 3.17.1 才能拿投放）；
-/// billing/claim 动作端点自 2026-11-02 起也钉本档（quota::zai_claim_headers_with_mid）。
+/// touch 投放通道仍走 quota.rs 的注册表真实探测（那边 3.17.x 才能拿投放）；
+/// billing/claim 与 marketing/touch/action 自 2026-11-03 起也改随探测值（投放按版本过滤，
+/// 领取必须与看到投放的同一档，否则 1004），**不再**钉本档。
 // 与 claim 通道同源（quota.rs），改档一处生效
 const SAFE_APP_VERSION: &str = crate::quota::SAFE_APP_VERSION;
 
