@@ -5,10 +5,11 @@ import { applyNativeTheme, currentTheme } from "./lib/theme.js";
 import { init, t, lang, stripErr } from "./lib/i18n.js";
 
 const SDK_URL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js";
-const TRACELESS_TIMEOUT = 8000;
+// 无痕单轮超时：桌面端 11-03 日志实测 SDK instanceReady 需 10.4s（网络差时），
+// 8s 会在实例就绪前误判超时转人工。12s×3 轮=36s，仍在 auto 等待窗口 45s 内。
+const TRACELESS_TIMEOUT = 12000;
 // 无痕验证实测成功率 ≈ 1/2，靠重试兜底（2.3）。auto（隐藏窗静默领取）模式下
-// 失败重试 2 次：3 轮 × 8s = 24s，在 auto 等待窗口 AUTO_CLAIM_WAIT_MS 45s 内。
-// 手动模式不重试 —— 用户对着弹窗等 24 秒不如立刻看到按钮。
+// 失败重试 2 次；手动模式不重试 —— 用户对着弹窗等 36 秒不如立刻看到按钮。
 const AUTO_RETRY_MAX = 2;
 const isAuto = new URLSearchParams(location.search).get("auto") === "1";
 
