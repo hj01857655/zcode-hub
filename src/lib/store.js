@@ -263,7 +263,8 @@ async function refreshClaimBatch(ids, chunkGapMs, onOne) {
 
 function autoClaimCooldownFor(r) {
   const now = Date.now();
-  if (r.code === 1005 && r.nextAt) return r.nextAt;
+  // 权威冷却优先：任意失败码带 nextAt（data.plan.ends_at，桌面对齐）都用它
+  if (r.nextAt) return r.nextAt;
   if (Number.isFinite(r.code) && r.code >= 1000) return now + 60 * 60 * 1000;
   if (r.code === "interactive") return now + 60 * 60 * 1000;
   return now + AUTO_CLAIM_INTERVAL_MS;
@@ -616,8 +617,8 @@ export const actions = {
     }
   },
 
-  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_preview = preview + touch 并集），
-  // 但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
+  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_preview = touch 投放清单，
+  // preview 通道已删），但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
   async refreshClaimOne(id) {
     if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
     if (store.claimable[id]?.busy) return;
@@ -816,7 +817,7 @@ export function wireEvents() {
       let msg = p.message || t("m.unknownErr");
       // 业务码直接亮出来（-1 = 网络/解析错误，无码可示）
       const codeBit = Number.isFinite(p.code) && p.code >= 0 ? `[${p.code}] ` : "";
-      if (p.code === 1005 && p.nextAt) {
+      if (p.nextAt) {
         msg += t("m.claimNextAt", { time: new Date(p.nextAt).toLocaleString(localeTag(), { hour12: false }) });
       }
       toast(t("m.claimFailed", { name: p.accountName, code: codeBit, msg }), "err");

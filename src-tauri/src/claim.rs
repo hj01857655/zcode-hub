@@ -6,7 +6,6 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-pub const BILLING_PREVIEW_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/preview";
 pub const BILLING_CLAIM_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/claim";
 pub const CLIENT_CONFIGS_URL: &str = "https://zcode.z.ai/api/v1/client/configs";
 pub const MARKETING_TOUCH_URL: &str = "https://zcode.z.ai/api/v1/marketing/touch";
@@ -76,13 +75,12 @@ impl From<String> for ClaimError {
 }
 
 fn claim_error(code: i64, body: &Value) -> ClaimError {
-    let next_at = if code == 1005 {
-        body.pointer("/data/plan/ends_at")
-            .and_then(|x| x.as_i64())
-            .map(|s| s * 1000)
-    } else {
-        None
-    };
+    // 桌面对齐（11-03 asar 实锤）：任意失败码都回读 data.plan.ends_at 作 failureEndsAt
+    // （计划期结束时间，前端冷却展示的权威值）——桌面端不按错误码分流，字段缺席时自然为 None
+    let next_at = body
+        .pointer("/data/plan/ends_at")
+        .and_then(|x| x.as_i64())
+        .map(|s| s * 1000);
     ClaimError {
         code,
         message: failure_message(code, body),
@@ -162,8 +160,8 @@ pub(crate) fn oauth_user_id(home: &Path, creds: &Value) -> Option<String> {
 }
 
 /// 该号当前可领的套餐清单：唯一来源是 `marketing/touch` 投放。
-/// 名字里的 preview 只指 `billing/preview` 这条**默认关闭**的对照通道
-/// （置 `ZSW_CLAIM_PREVIEW` 才打），不是调用本函数就会发那个请求。
+/// `billing/preview` 通道已整体删除（50 §3 实测恒空，五个已领到的号也一样空，
+/// 还是已知会 429 的端点——留着每次刷新只多一个必死请求）。
 pub fn claimable_plans(
     home: &Path,
     creds: &Value,
@@ -172,57 +170,11 @@ pub fn claimable_plans(
 ) -> Result<Vec<ClaimPlan>, String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    let touch = touch_plans(&token, device_mid.clone());
-    // 50 §3 实测 preview 恒空（五个已领到的号也一样空），领取入口唯一由投放驱动，
-    // 所以主路径不打 preview：每次刷新白送一个必死请求，preview 还是已知会 429 的端点。
-    // 要拿 preview 做归因对照时置 ZSW_CLAIM_PREVIEW=1 恢复副通道（坏了同样不连坐）。
-    let preview_on = std::env::var("ZSW_CLAIM_PREVIEW").is_ok();
-    let mut base = if preview_on {
-        let url = format!(
-            "{BILLING_PREVIEW_URL}?app_version={}&platform={}",
-            quota::zcode_app_version(),
-            quota::client_platform()
-        );
-        let preview_err;
-        match preview_once(&url, &token, device_mid) {
-            Ok(p) => p,
-            Err(e) => {
-                preview_err = e;
-                match &touch {
-                    Ok(t) if !t.is_empty() => t.clone(),
-                    _ => return Err(preview_err),
-                }
-            }
-        }
-    } else {
-        vec![]
-    };
-    // touch 通道失败时「无投放」的结论不可信（429/网络错都会被当成空 deliveries）：
-    // preview 确认空而 touch 又坏了 → 报错让前端走 catch 保留既有可领条，
-    // 而不是拿一个被限流污染的空结果把刚刷出来的资格顶掉
-    let touch = match touch {
-        Ok(t) => t,
-        Err(e) => {
-            if base.is_empty() {
-                return Err(e);
-            }
-            eprintln!("[zsw] marketing/touch: {e}");
-            vec![]
-        }
-    };
-    for tp in touch {
-        match base.iter().position(|p| p.plan_id == tp.plan_id) {
-            Some(i) => {
-                // preview 条目缺权益明细时，用投放里的完整 zcode_plan 补全
-                if base[i].grant_items.is_empty() && !tp.grant_items.is_empty() {
-                    base[i] = tp;
-                }
-            }
-            None => base.push(tp),
-        }
-    }
-    base.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
-    Ok(base)
+    // touch 失败（429/网络错）原样上抛，不吞成「无投放」：前端走 catch 保留
+    // 既有可领条，而不是拿一个被限流污染的空结果把刚刷出来的资格顶掉
+    let mut plans = touch_plans(&token, device_mid)?;
+    plans.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
+    Ok(plans)
 }
 
 /// 营销触点投放：`buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的
@@ -361,31 +313,6 @@ pub(crate) fn http_err(prefix: &str, e: ureq::Error) -> String {
     format!("{prefix} {e}")
 }
 
-fn preview_once(url: &str, token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, String> {
-    let mut req = agent().get(url);
-    for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
-        req = req.set(&k, &v);
-    }
-    let resp = req
-        .call()
-        .map_err(|e| http_err(&crate::i18n::tr("err.claim.preview_req"), e))?
-        .into_string()
-        .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
-    let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
-    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-    if code != 0 {
-        // 码进错误串：归因/对照服务端文档全靠它，只有文案没有码没法定位
-        return Err(format!("[{code}] {}", failure_message(code, &v)));
-    }
-    let plans = v
-        .pointer("/data/plans")
-        .and_then(|p| p.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut out: Vec<ClaimPlan> = plans.iter().filter_map(parse_plan).collect();
-    out.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
-    Ok(out)
-}
 
 pub fn submit_claim(
     home: &Path,
