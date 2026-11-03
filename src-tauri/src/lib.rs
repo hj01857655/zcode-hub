@@ -284,7 +284,7 @@ async fn get_account_quota(id: String) -> Result<quota::QuotaOverview, String> {
 }
 
 #[tauri::command]
-async fn claim_preview(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
+async fn claim_refresh_one(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
     // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
     tauri::async_runtime::spawn_blocking(move || {
         let paths = Paths::detect();
@@ -1350,7 +1350,7 @@ pub fn run() {
             switch_to,
             get_live_quota,
             get_account_quota,
-            claim_preview,
+            claim_refresh_one,
             claim_start,
             claim_captcha_config,
             claim_captcha_submit,

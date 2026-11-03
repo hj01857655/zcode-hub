@@ -123,7 +123,7 @@ async function loadClaimPreview(id) {
   if (cur.busy) return;
   store.claimable[id] = { plans: cur.plans || [], busy: true };
   try {
-    const plans = await invoke("claim_preview", { id });
+    const plans = await invoke("claim_refresh_one", { id });
     store.claimable[id] = { plans: plans || [], err: null, busy: false };
   } catch (e) {
     store.claimable[id] = { plans: cur.plans || [], err: String(e), busy: false };
@@ -185,10 +185,10 @@ function waitForClaimResult(accountId, timeoutMs = 90000) {
   });
 }
 
-async function awaitClaimPreviewFresh(id) {
+async function awaitClaimableFresh(id) {
   store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
   try {
-    const plans = await invoke("claim_preview", { id });
+    const plans = await invoke("claim_refresh_one", { id });
     store.claimable[id] = { plans: plans || [], err: null, busy: false };
   } catch (e) {
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
@@ -251,7 +251,7 @@ async function sweepTick() {
 // 批量跳过判定：登录令牌已过期 / 快照缺资格登录信息的号刷了必失败，批量操作前剔除
 const skipReason = (a) => (a?.jwt_expired ? t("btn.jwtExpired") : a?.has_user_info === false ? t("btn.relogin") : null);
 
-// 有界并发批量刷新资格：claim_preview 每号独立、跑 blocking 线程池无共享锁。
+// 有界并发批量刷新资格：claim_refresh_one 每号独立、跑 blocking 线程池无共享锁。
 // 并发档位与 sweep / 邀请页同款（4 + 800ms 错峰）
 async function refreshClaimBatch(ids, chunkGapMs, onOne) {
   const CONCURRENCY = 4;
@@ -294,7 +294,7 @@ async function autoClaimTick() {
       if (!accIds().some((a) => a.id === id)) return;
       store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
       try {
-        const plans = (await invoke("claim_preview", { id })) || [];
+        const plans = (await invoke("claim_refresh_one", { id })) || [];
         store.claimable[id] = { plans, err: null, busy: false };
       } catch (e) {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
@@ -339,7 +339,7 @@ async function autoClaimTick() {
           break;
         }
         gotAny = true; roundClaimed++;
-        await awaitClaimPreviewFresh(id);
+        await awaitClaimableFresh(id);
         emit();
         progressed = true;
         await new Promise((res) => setTimeout(res, 1200));
@@ -617,7 +617,7 @@ export const actions = {
     }
   },
 
-  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_preview = touch 投放清单，
+  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_refresh_one = touch 投放清单，
   // preview 通道已删），但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
   async refreshClaimOne(id) {
     if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
@@ -633,7 +633,7 @@ export const actions = {
     refreshOneBusy = true;
     emit();
     try {
-      const plans = (await invoke("claim_preview", { id })) || [];
+      const plans = (await invoke("claim_refresh_one", { id })) || [];
       store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
       if (plans.length) {
         toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
@@ -715,7 +715,7 @@ export const actions = {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
         emit();
         try {
-          const plans = (await invoke("claim_preview", { id })) || [];
+          const plans = (await invoke("claim_refresh_one", { id })) || [];
           store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
           if (plans.length) okCount++;
         } catch (e) {
