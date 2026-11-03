@@ -10,6 +10,11 @@ pub const BILLING_PREVIEW_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/bill
 pub const BILLING_CLAIM_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/claim";
 pub const CLIENT_CONFIGS_URL: &str = "https://zcode.z.ai/api/v1/client/configs";
 pub const MARKETING_TOUCH_URL: &str = "https://zcode.z.ai/api/v1/marketing/touch";
+pub const MARKETING_TOUCH_ACTION_URL: &str = "https://zcode.z.ai/api/v1/marketing/touch/action";
+
+/// touch 查询序号：桌面端为模块级递增计数器（asar 实锤 `Xde=0, seq=String(Xde++)`，
+/// 首查发 0），非固定值——对齐之，避免服务端按 seq 去重时我们恒撞同一序号。
+static TOUCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 const CLAIM_TIMEOUT_SECS: u64 = 25;
 
@@ -29,6 +34,9 @@ pub struct ClaimPlan {
     pub grants: Vec<String>,
     #[serde(default)]
     pub grant_items: Vec<ClaimGrant>,
+    /// 投放 campaign 标识：领取成功后上报 touch/action 用（桌面端对齐，11-03 asar 实锤）
+    #[serde(default)]
+    pub campaign_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,8 +235,9 @@ pub fn claimable_plans(
 /// 失败一律 Err 上抛而非吞成空列表：调用方要区分「确认无投放」和「这次没查着」，
 /// 后者冒充前者会把限流期间的空响应当权威结论，顶掉前端已展示的可领条
 fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, String> {
+    let seq = TOUCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let url = format!(
-        "{MARKETING_TOUCH_URL}?seq=1&app_version={}&platform={}",
+        "{MARKETING_TOUCH_URL}?seq={seq}&app_version={}&platform={}",
         quota::zcode_app_version(),
         quota::client_platform()
     );
@@ -250,6 +259,15 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
         .ok_or_else(|| crate::i18n::tr("err.claim.touch_shape"))?;
     let mut out: Vec<ClaimPlan> = vec![];
     for d in &dels {
+        // report 需要的投放 campaign 标识（桌面端领取成功后 POST touch/action 用）
+        let dl_campaign = ["campaign_id", "campaignId"]
+            .iter()
+            .find_map(|k| {
+                d.get(k)
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            });
         let mut wanted: Vec<String> = vec![];
         for node in [d.get("banner"), Some(d)].into_iter().flatten() {
             let Some(arr) = node.get("buttons").and_then(|b| b.as_array()) else {
@@ -295,7 +313,8 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
                 .trim()
                 .to_string();
             if !pid.is_empty() && wanted.iter().any(|w| *w == pid) {
-                if let Some(plan) = parse_plan(p) {
+                if let Some(mut plan) = parse_plan(p) {
+                    plan.campaign_id = dl_campaign.clone();
                     out.push(plan);
                     matched = true;
                 }
@@ -313,6 +332,7 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
                     plan_id: pid,
                     grants: vec![],
                     grant_items: vec![],
+                    campaign_id: dl_campaign.clone(),
                 });
             }
         }
@@ -411,8 +431,42 @@ pub fn submit_claim(
     Ok(v)
 }
 
-pub fn fetch_captcha_config() -> Result<CaptchaConfig, String> {
-    let mut req = agent().get(CLIENT_CONFIGS_URL);
+/// 桌面对齐（11-03 asar 实锤）：领取后上报投放动作。action_type = confirm（领取）/ cancel（忽略）。
+/// 纯遥测形状——失败不上抛到领取结果，调用方记日志即可。载荷 {campaign_id, action_type}，
+/// 响应 {code:0}；超时 15s（桌面端同值）。
+pub fn touch_report(
+    home: &Path,
+    creds: &Value,
+    config: Option<&Value>,
+    campaign_id: &str,
+    action_type: &str,
+    device_mid: Option<String>,
+) -> Result<(), String> {
+    let secret = zcrypto::default_secret(home);
+    let token = claim_token(creds, config, &secret)?;
+    let mut req = agent().post(MARKETING_TOUCH_ACTION_URL);
+    for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
+        req = req.set(&k, &v);
+    }
+    let resp = req
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(15))
+        .send_json(serde_json::json!({
+            "campaign_id": campaign_id,
+            "action_type": action_type,
+        }))
+        .map_err(|e| http_err("marketing/touch/action", e))?
+        .into_string()
+        .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    let v: Value = serde_json::from_str(&resp).unwrap_or(Value::Null);
+    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        return Err(format!("code={code}"));
+    }
+    Ok(())
+}
+
+pub fn fetch_captcha_config() -> Result<CaptchaConfig, String> {    let mut req = agent().get(CLIENT_CONFIGS_URL);
     for (k, v) in quota::zai_billing_headers("") {
         req = req.set(&k, &v);
     }
@@ -496,6 +550,7 @@ fn parse_plan(p: &Value) -> Option<ClaimPlan> {
         plan_id,
         grants,
         grant_items,
+        campaign_id: None,
     })
 }
 

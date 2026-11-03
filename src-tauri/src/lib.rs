@@ -32,6 +32,8 @@ struct PendingClaim {
     credentials: Value,
     config: Option<Value>,
     device_mid: String,
+    /// 投放 campaign 标识：领取成功后上报 touch/action 用（对齐桌面端）
+    campaign_id: Option<String>,
 }
 
 static PENDING_CLAIM: Mutex<Option<PendingClaim>> = Mutex::new(None);
@@ -321,6 +323,7 @@ async fn claim_start(
         credentials: acc.credentials,
         config: acc.config,
         device_mid: mid,
+        campaign_id: plan.campaign_id.clone(),
     });
     open_captcha_window(&app, auto.unwrap_or(false))?;
     Ok(json!({ "account": acc.name, "plan": display }))
@@ -349,6 +352,11 @@ async fn claim_captcha_submit(
         pending.account_name.clone(),
         pending.plan_name.clone(),
     );
+    // 领取成功后的 touch/report 上报素材（pending 被 move 进闭包，这里提前拆出）
+    let rep_campaign = pending.campaign_id.clone();
+    let rep_creds = pending.credentials.clone();
+    let rep_config = pending.config.clone();
+    let rep_mid = pending.device_mid.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let paths = Paths::detect();
         claim::submit_claim(
@@ -385,6 +393,21 @@ async fn claim_captcha_submit(
             };
             let p = serde_json::to_value(&outcome).unwrap_or(Value::Null);
             let _ = app.emit("claim://result", &p);
+            // 桌面对齐（11-03 asar 实锤）：领取成功后上报投放动作 confirm；纯遥测，
+            // 失败仅记日志不上抛——不影响领取结果
+            if let Some(cid) = rep_campaign.as_deref() {
+                let paths = Paths::detect();
+                if let Err(e) = claim::touch_report(
+                    &paths.home,
+                    &rep_creds,
+                    rep_config.as_ref(),
+                    cid,
+                    "confirm",
+                    Some(rep_mid),
+                ) {
+                    eprintln!("[zsw] marketing/touch/action: {e}");
+                }
+            }
             p
         }
         Err(e) => {
