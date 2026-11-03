@@ -534,10 +534,31 @@ async fn referral_bind_cancel(app: AppHandle) -> Result<(), String> {
 }
 
 fn close_captcha_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("captcha") {
-        // destroy 不触发 CloseRequested：程序化关窗（提交成功/取消）不能被误判成用户关窗
-        let _ = w.destroy();
-    }
+    // 不能同步 destroy：验证码 SDK 此刻还有在途请求，wry 的自定义协议回调会往已销毁的
+    // HWND 发 PostMessage，Windows 下刷一串 `PostMessage failed … 0x80070578 无效的窗口句柄`
+    // （仅 debug 构建打印）。先隐窗 + window.stop() 掉在途加载，再隔一段延时销毁。
+    // 不提前 clear pending：调用方（提交/取消路径）已自行清过，这里只负责拆窗。
+    let Some(win) = app.get_webview_window("captcha") else {
+        return;
+    };
+    let _ = win.hide();
+    let _ = win.eval("try { window.stop() } catch (e) {}");
+    let gen = CAPTCHA_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        // 窗口可能被其它命令重新打开/复用：代次变了就不关新窗
+        if CAPTCHA_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen {
+            return;
+        }
+        let a = app2.clone();
+        let _ = app2.run_on_main_thread(move || {
+            if let Some(w) = a.get_webview_window("captcha") {
+                // destroy 不触发 CloseRequested：程序化关窗（提交成功/取消）不能被误判成用户关窗
+                let _ = w.destroy();
+            }
+        });
+    });
 }
 
 struct PendingOAuth {
@@ -1025,11 +1046,17 @@ fn spawn_poll_loop(app: AppHandle, provider: String, flow: String, mid: String, 
     });
 }
 
+/// 验证码窗口关窗代次：`close_captcha_window` 延迟销毁期间若有新窗打开/复用，
+/// 旧定时器不得误杀新窗。
+static CAPTCHA_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn open_captcha_window(app: &AppHandle, auto: bool) -> Result<(), String> {
     let (w, h) = (380.0, 320.0);
     // 无痕失败是否重试由页面自己判（auto = 隐藏窗，重试用户无感知），模式随 URL 走；
     // 复用已有窗口时不能 reload——reload 会带上一次的 query，手动转 auto 会丢掉重试能力
     let page = if auto { "captcha.html?auto=1" } else { "captcha.html" };
+    // 开窗即作废上一轮延迟销毁（复用路径也要 bump：否则在飞的定时器会关掉刚复用的窗）
+    CAPTCHA_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if let Some(win) = app.get_webview_window("captcha") {
         let _ = win.eval(&format!("location.replace({page:?})"));
         center_over_main(app, &win, w, h);
