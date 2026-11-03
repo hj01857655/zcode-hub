@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "zcode-switch",
+  "productName": "zcode-hub",
   "version": "1.9.2",
-  "identifier": "com.zswitch.app",
+  "identifier": "com.zhub.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:5173/",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Z·SWITCH",
+        "title": "Z·HUB",
         "width": 1040,
         "height": 640,
         "minWidth": 760,
@@ -60,7 +60,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFEMTlBQ0IwQjI0MUZFQzEKUldUQi9rR3lzS3dacmRqbGJHS1lzeVJoejNaZWFTc29WUkJwMTQ4eDNDU2g0bjJTTlhsbmEvdmgK",
       "endpoints": [
-        "https://github.com/hj01857655/zcode-switch/releases/latest/download/latest.json"
+        "https://github.com/hj01857655/zcode-hub/releases/latest/download/latest.json"
       ]
     }
   }

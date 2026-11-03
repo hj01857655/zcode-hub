@@ -1,7 +1,7 @@
 // GATEWAY 无头启动入口：不经 Tauri UI 直接起 axum 服务（e2e 验收 / 服务器部署用）。
 // 端口与 api_key 读 gateway.json 配置；可用 ZCODE_GATEWAY_PORT / ZCODE_GATEWAY_API_KEY 覆盖。
 fn main() {
-    let mut cfg = zcode_switch_lib::gateway::config::GatewayConfig::load();
+    let mut cfg = zcode_hub_lib::gateway::config::GatewayConfig::load();
     let port = std::env::var("ZCODE_GATEWAY_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -16,11 +16,11 @@ fn main() {
     cfg.api_key = api_key;
     cfg.port = port;
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let shared = std::sync::Arc::new(zcode_switch_lib::gateway::GatewayShared {
+    let shared = std::sync::Arc::new(zcode_hub_lib::gateway::GatewayShared {
         log: std::sync::Mutex::new(Vec::new()),
-        pool: zcode_switch_lib::gateway::pool::Pool::new(),
+        pool: zcode_hub_lib::gateway::pool::Pool::new(),
         models: std::sync::Mutex::new(
-            zcode_switch_lib::gateway::MODEL_LIST
+            zcode_hub_lib::gateway::MODEL_LIST
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
@@ -35,6 +35,6 @@ fn main() {
         .build()
         .expect("gatewayd tokio runtime");
     eprintln!("[gatewayd] starting on {addr}");
-    rt.block_on(zcode_switch_lib::gateway::server::serve(addr, cfg, rx, shared));
+    rt.block_on(zcode_hub_lib::gateway::server::serve(addr, cfg, rx, shared));
     drop(tx);
 }

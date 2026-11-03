@@ -1,6 +1,6 @@
 # GATEWAY — Rust 版 Gateway 反代设计文档
 
-> 目标：在 zcode-switch（Tauri）内嵌 OpenAI/Anthropic 兼容反代，复用本工具现成的多号凭据体系，替代旁挂 `ZCode2api-go` 独立进程。
+> 目标：在 zcode-hub（Tauri）内嵌 OpenAI/Anthropic 兼容反代，复用本工具现成的多号凭据体系，替代旁挂 `ZCode2api-go` 独立进程。
 > 参考实现：`ZCode2api-go`（Go，~2.6k 行，协议已验证）。本文是其 Rust 翻译的设计与分解。
 > 状态（2026-11-01）：M1-M3 全部落地；OpenAI 转换器已收敛到 `openai.rs` 唯一实现（translate.rs 只留 Anthropic 侧供 /v1/messages 与 /v1/responses），`server.rs` 全部挂 `openai.rs`；多号池已接线并经网关 e2e 验收（gatewayd 非流式+流式真实出话）；`src/bin/gatewayd.rs` 提供无 Tauri 的无头启动。
 
@@ -23,7 +23,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 ## 2. 架构
 
 ```
-┌─ zcode-switch (Tauri) ─────────────────────────────┐
+┌─ zcode-hub (Tauri) ─────────────────────────────┐
 │  Webview UI ──(start/stop/status IPC)──► GatewayCtl │
 │                                        │           │
 │  [gateway 模块, 独立线程]                ▼           │

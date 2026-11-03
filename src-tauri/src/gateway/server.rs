@@ -128,7 +128,7 @@ async fn models(State(state): State<std::sync::Arc<SvcState>>, headers: HeaderMa
     check_auth(&state, &headers)?;
     let model = |id: &str| {
         json!({
-            "id": id, "object": "model", "created": 0, "owned_by": "zcode-switch",
+            "id": id, "object": "model", "created": 0, "owned_by": "zcode-hub",
             "permission": [], "root": id, "parent": null,
         })
     };

@@ -1,14 +1,14 @@
 [package]
-name = "zcode-switch"
+name = "zcode-hub"
 version = "1.9.2"
-description = "ZCode 账号切换器"
+description = "ZCode 多账号工作台 · 切换 / 额度 / 领取 / 网关"
 license = "MIT"
 edition = "2021"
 # bin/gatewayd.rs 是第二个二进制（无头网关）；tauri dev 的 cargo run 需要 default-run 指主程序
-default-run = "zcode-switch"
+default-run = "zcode-hub"
 
 [lib]
-name = "zcode_switch_lib"
+name = "zcode_hub_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

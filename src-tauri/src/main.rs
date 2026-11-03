@@ -41,7 +41,7 @@ fn main() {
         let cli_args: Vec<String> = args.iter().skip(pos + 1).cloned().collect();
         #[cfg(windows)]
         ensure_cli_console();
-        let (out, code) = zcode_switch_lib::cli::run(&cli_args);
+        let (out, code) = zcode_hub_lib::cli::run(&cli_args);
         use std::io::Write;
         let mut stdout = std::io::stdout();
         let _ = stdout.write_all(out.as_bytes());
@@ -49,5 +49,5 @@ fn main() {
         let _ = stdout.flush();
         std::process::exit(code);
     }
-    zcode_switch_lib::run()
+    zcode_hub_lib::run()
 }

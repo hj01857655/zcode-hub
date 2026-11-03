@@ -24,7 +24,7 @@
 
 ### 加密：`enc:v1`（zcrypto.rs）
 
-值以 `enc:v1:` 前缀开头的即密文，格式与 ZCode 官方客户端的加密一致，zcode-switch 可双向互解：
+值以 `enc:v1:` 前缀开头的即密文，格式与 ZCode 官方客户端的加密一致，zcode-hub 可双向互解：
 
 ```
 enc:v1:<b64url(nonce)>.<b64url(tag)>.<b64url(ciphertext)>

@@ -1,8 +1,8 @@
-# Z·SWITCH (zcode-switch)
+# Z·HUB (zcode-hub)
 
-![Release](https://img.shields.io/github/v/release/hj01857655/zcode-switch?label=release&sort=semver)
-![CI](https://github.com/hj01857655/zcode-switch/actions/workflows/ci.yml/badge.svg)
-![License](https://img.shields.io/github/license/hj01857655/zcode-switch)
+![Release](https://img.shields.io/github/v/release/hj01857655/zcode-hub?label=release&sort=semver)
+![CI](https://github.com/hj01857655/zcode-hub/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/hj01857655/zcode-hub)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 [简体中文](README.md) ｜ **English**
@@ -15,14 +15,14 @@ A Tauri 2 desktop tool for one-click switching between multiple ZCode accounts, 
 
 ## Download
 
-Grab the installer for your platform from [Releases](https://github.com/hj01857655/zcode-switch/releases/latest):
+Grab the installer for your platform from [Releases](https://github.com/hj01857655/zcode-hub/releases/latest):
 
 | Platform | File |
 |---|---|
-| Windows x64 | `zcode-switch_<ver>_x64-setup.exe` (NSIS installer) |
-| Windows ARM64 | `zcode-switch_<ver>_arm64-setup.exe` (NSIS installer) |
-| macOS Apple Silicon | `zcode-switch_<ver>_aarch64.dmg` |
-| macOS Intel | `zcode-switch_<ver>_x64.dmg` |
+| Windows x64 | `zcode-hub_<ver>_x64-setup.exe` (NSIS installer) |
+| Windows ARM64 | `zcode-hub_<ver>_arm64-setup.exe` (NSIS installer) |
+| macOS Apple Silicon | `zcode-hub_<ver>_aarch64.dmg` |
+| macOS Intel | `zcode-hub_<ver>_x64.dmg` |
 | Linux amd64 | `.deb` (Debian/Ubuntu) or `.AppImage` (universal) |
 | Linux arm64 | `.deb` / `.AppImage` |
 
@@ -86,19 +86,19 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 ## CLI
 
 ```
-zcode-switch.exe --cli state|list
-zcode-switch.exe --cli quota [--id <account-id>]
-zcode-switch.exe --cli claim-preview [--id <account-id>]
-zcode-switch.exe --cli capture [--name <name>]
-zcode-switch.exe --cli switch --id <id> [--force] [--restart|--no-restart] [--hot <bool>|--no-hot]
-zcode-switch.exe --cli kill
-zcode-switch.exe --cli export --id <id> --out <a.zsb>
-zcode-switch.exe --cli export-all --out <all.zsb>
-zcode-switch.exe --cli import --file <file.zsb>
-zcode-switch.exe --cli rename|delete|update|behavior|setpath|launch
-zcode-switch.exe --cli gateway status               # gateway config + port probe (start/stop in the GUI)
-zcode-switch.exe --cli gateway logs [--n count]     # tail of gateway.jsonl request log
-zcode-switch.exe --cli --lang en state              # English output (--lang takes a space-separated value, works anywhere in the command line; defaults to the GUI/system language)
+zcode-hub.exe --cli state|list
+zcode-hub.exe --cli quota [--id <account-id>]
+zcode-hub.exe --cli claim-preview [--id <account-id>]
+zcode-hub.exe --cli capture [--name <name>]
+zcode-hub.exe --cli switch --id <id> [--force] [--restart|--no-restart] [--hot <bool>|--no-hot]
+zcode-hub.exe --cli kill
+zcode-hub.exe --cli export --id <id> --out <a.zsb>
+zcode-hub.exe --cli export-all --out <all.zsb>
+zcode-hub.exe --cli import --file <file.zsb>
+zcode-hub.exe --cli rename|delete|update|behavior|setpath|launch
+zcode-hub.exe --cli gateway status               # gateway config + port probe (start/stop in the GUI)
+zcode-hub.exe --cli gateway logs [--n count]     # tail of gateway.jsonl request log
+zcode-hub.exe --cli --lang en state              # English output (--lang takes a space-separated value, works anywhere in the command line; defaults to the GUI/system language)
 ```
 
 CLI password (export / import): prefer the `ZSW_PASSWORD` environment variable (keeps it out of process lists and command history); `--password <password>` also works.

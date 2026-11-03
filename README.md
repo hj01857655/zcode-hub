@@ -1,8 +1,8 @@
-# Z·SWITCH (zcode-switch)
+# Z·HUB (zcode-hub)
 
-![Release](https://img.shields.io/github/v/release/hj01857655/zcode-switch?label=%E7%89%88%E6%9C%AC&sort=semver)
-![CI](https://github.com/hj01857655/zcode-switch/actions/workflows/ci.yml/badge.svg)
-![License](https://img.shields.io/github/license/hj01857655/zcode-switch)
+![Release](https://img.shields.io/github/v/release/hj01857655/zcode-hub?label=%E7%89%88%E6%9C%AC&sort=semver)
+![CI](https://github.com/hj01857655/zcode-hub/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/hj01857655/zcode-hub)
 ![Platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 **简体中文** ｜ [English](README.en.md)
@@ -15,14 +15,14 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 
 ## 下载安装
 
-从 [Releases](https://github.com/hj01857655/zcode-switch/releases/latest) 下载对应平台的安装包：
+从 [Releases](https://github.com/hj01857655/zcode-hub/releases/latest) 下载对应平台的安装包：
 
 | 平台 | 文件 |
 |---|---|
-| Windows x64 | `zcode-switch_<版本>_x64-setup.exe`（NSIS 安装向导） |
-| Windows ARM64 | `zcode-switch_<版本>_arm64-setup.exe`（NSIS 安装向导） |
-| macOS Apple Silicon | `zcode-switch_<版本>_aarch64.dmg` |
-| macOS Intel | `zcode-switch_<版本>_x64.dmg` |
+| Windows x64 | `zcode-hub_<版本>_x64-setup.exe`（NSIS 安装向导） |
+| Windows ARM64 | `zcode-hub_<版本>_arm64-setup.exe`（NSIS 安装向导） |
+| macOS Apple Silicon | `zcode-hub_<版本>_aarch64.dmg` |
+| macOS Intel | `zcode-hub_<版本>_x64.dmg` |
 | Linux amd64 | `.deb`（Debian/Ubuntu）或 `.AppImage`（通用） |
 | Linux arm64 | `.deb`／`.AppImage` |
 
@@ -86,19 +86,19 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 ## CLI
 
 ```
-zcode-switch.exe --cli state|list
-zcode-switch.exe --cli quota [--id <账号id>]
-zcode-switch.exe --cli claim-preview [--id <账号id>]
-zcode-switch.exe --cli capture [--name 名称]
-zcode-switch.exe --cli switch --id <id> [--force] [--restart|--no-restart] [--hot <bool>|--no-hot]
-zcode-switch.exe --cli kill
-zcode-switch.exe --cli export --id <id> --out <a.zsb>
-zcode-switch.exe --cli export-all --out <all.zsb>
-zcode-switch.exe --cli import --file <file.zsb>
-zcode-switch.exe --cli rename|delete|update|behavior|setpath|launch
-zcode-switch.exe --cli gateway status               # 网关配置 + 端口监听探测（启停在 GUI）
-zcode-switch.exe --cli gateway logs [--n 条数]      # 读 gateway.jsonl 尾部请求日志
-zcode-switch.exe --cli --lang en state              # 英文输出（--lang 空格传值、可置于任意位置；默认跟 GUI 语言/系统语言）
+zcode-hub.exe --cli state|list
+zcode-hub.exe --cli quota [--id <账号id>]
+zcode-hub.exe --cli claim-preview [--id <账号id>]
+zcode-hub.exe --cli capture [--name 名称]
+zcode-hub.exe --cli switch --id <id> [--force] [--restart|--no-restart] [--hot <bool>|--no-hot]
+zcode-hub.exe --cli kill
+zcode-hub.exe --cli export --id <id> --out <a.zsb>
+zcode-hub.exe --cli export-all --out <all.zsb>
+zcode-hub.exe --cli import --file <file.zsb>
+zcode-hub.exe --cli rename|delete|update|behavior|setpath|launch
+zcode-hub.exe --cli gateway status               # 网关配置 + 端口监听探测（启停在 GUI）
+zcode-hub.exe --cli gateway logs [--n 条数]      # 读 gateway.jsonl 尾部请求日志
+zcode-hub.exe --cli --lang en state              # 英文输出（--lang 空格传值、可置于任意位置；默认跟 GUI 语言/系统语言）
 ```
 
 CLI 密码（export / import）：优先环境变量 `ZSW_PASSWORD`（不出现在进程列表和命令历史），也可 `--password <密码>`。
