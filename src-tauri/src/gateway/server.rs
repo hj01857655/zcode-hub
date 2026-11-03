@@ -107,12 +107,15 @@ fn check_auth(state: &SvcState, headers: &HeaderMap) -> Result<(), StatusCode> {
     if state.api_key.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let got = headers
+    // 双形态鉴权：OpenAI 形状用 Authorization: Bearer；Anthropic 形状（anthropic-compatible
+    // 客户端，如 AtomCode）标准是 x-api-key 头——两种都接受，任一命中即放行
+    let bearer = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .unwrap_or("");
-    if got != state.api_key {
+    let xkey = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if bearer != state.api_key && xkey != state.api_key {
         return Err(StatusCode::UNAUTHORIZED);
     }
     Ok(())
@@ -411,7 +414,7 @@ async fn messages(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = translate::aggregate_sse(&raw, &model);
-        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     // 流式：上游 SSE 原样透传（Anthropic 原生客户端，事件形态一致，零转换）
@@ -426,6 +429,11 @@ async fn messages(
     tokio::spawn(async move {
         let mut resp = resp;
         let mut acc = String::new(); // 下游透传原文累积（截断入日志）
+        // 上游异常断流检测：message_stop 未出现即视为截断。实测形态：上游 502/连接重置
+        // 掐在流中途，网关原样收尾 → 客户端只见半截输出且无法确认工具结果
+        // （Claude Code 表现为 "incomplete or unconfirmed tool output"）。
+        // 收流合成 error 事件把静默截断转成可重试的 overloaded_error，客户端会自动恢复。
+        let mut saw_stop = false;
         // SSE keepalive：上游静默超阈值时发 ": ping" 注释帧（SSE 规范里注释会被客户端忽略），
         // 防止中间层把看似空闲的连接掐掉——模型长思考场景真实存在
         let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
@@ -449,6 +457,9 @@ async fn messages(
             };
             match chunk {
                 Ok(Some(c)) => {
+                    if !saw_stop && c.windows(12).any(|w| w == b"message_stop") {
+                        saw_stop = true;
+                    }
                     if acc.chars().count() < LOG_RESP_CAP {
                         acc.push_str(&String::from_utf8_lossy(&c));
                     }
@@ -460,9 +471,17 @@ async fn messages(
                 Err(_) => break,
             }
         }
+        let truncated = !saw_stop;
+        if truncated {
+            const TRUNC_TAIL: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}}\n\n";
+            let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_TAIL.as_bytes()))).await;
+            if acc.chars().count() < LOG_RESP_CAP {
+                acc.push_str(TRUNC_TAIL);
+            }
+        }
         push_ok_log(
             &shared,
-            "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)),
+            "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)),
         );
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
@@ -514,7 +533,7 @@ async fn chat_completions(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = openai::aggregate_sse_to_openai(&raw, &model);
-        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
 
@@ -530,6 +549,9 @@ async fn chat_completions(
         let mut conv = openai::OpenAiStream::new(&model);
         let mut resp = resp;
         let mut acc = String::new(); // 下游 chunk 帧累积（截断入日志）
+        // 截断检测：与 /v1/messages 同款——上游（Anthropic SSE）收尾必须含 message_stop，
+        // 否则视为中途断流，先发 OpenAI 式 error 帧再正常收尾
+        let mut saw_stop = false;
         // SSE keepalive：与 /v1/messages 同款（OpenAI 流注释帧同样被客户端忽略）
         let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
         idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -551,6 +573,9 @@ async fn chat_completions(
             };
             match chunk {
                 Ok(Some(c)) => {
+                    if !saw_stop && c.windows(12).any(|w| w == b"message_stop") {
+                        saw_stop = true;
+                    }
                     let out = conv.feed(&String::from_utf8_lossy(&c));
                     if acc.chars().count() < LOG_RESP_CAP {
                         acc.push_str(&out);
@@ -566,12 +591,20 @@ async fn chat_completions(
                 }
             }
         }
+        let truncated = !saw_stop;
+        if truncated {
+            const TRUNC_FRAME: &str = "data: {\"error\":{\"type\":\"server_error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}}\n\n";
+            let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_FRAME.as_bytes()))).await;
+            if acc.chars().count() < LOG_RESP_CAP {
+                acc.push_str(TRUNC_FRAME);
+            }
+        }
         let fin = conv.finish();
         if acc.chars().count() < LOG_RESP_CAP {
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()
@@ -800,6 +833,7 @@ fn push_ok_log(
     req_id: &str,
     ua: &str,
     req: &str,
+    truncated: bool,
     resp: Option<String>,
 ) {
     let (tin, tout, tcr, tcw) = extract_usage(resp.as_ref());
@@ -813,6 +847,7 @@ fn push_ok_log(
         "req_id": req_id,
         "tin": tin, "tout": tout, "tcr": tcr, "tcw": tcw,
         "cost": cost,
+        "truncated": truncated,
         "finish": if finish.is_empty() { serde_json::Value::Null } else { serde_json::json!(finish) },
         "ua": if ua.is_empty() { serde_json::Value::Null } else { serde_json::json!(ua) },
         "req": req,
@@ -980,7 +1015,7 @@ async fn responses_endpoint(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = super::responses::aggregate_sse_to_responses(&raw, &model);
-        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     let ok = pool_send(&state, &prepared, "/v1/responses", &model, true, &req_preview, &req_id, sticky).await?;
@@ -1000,6 +1035,9 @@ async fn responses_endpoint(
             return; // 客户端断开
         }
         // SSE keepalive：与前两个端点同款
+        // 截断检测：与前两个端点同款——上游（Anthropic SSE）必须含 message_stop，
+        // 否则发 Responses 式 error 事件再收尾（finish() 原样会谎报 completed）
+        let mut saw_stop = false;
         let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
         idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         idle.tick().await;
@@ -1020,6 +1058,9 @@ async fn responses_endpoint(
             };
             match chunk {
                 Ok(Some(c)) => {
+                    if !saw_stop && c.windows(12).any(|w| w == b"message_stop") {
+                        saw_stop = true;
+                    }
                     let out = stream.feed(&String::from_utf8_lossy(&c));
                     if acc.chars().count() < LOG_RESP_CAP {
                         acc.push_str(&out);
@@ -1031,8 +1072,16 @@ async fn responses_endpoint(
                 Ok(None) => break,
                 Err(e) => {
                     let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
-                    return;
+                    break;
                 }
+            }
+        }
+        let truncated = !saw_stop;
+        if truncated {
+            const TRUNC_EVENT: &str = "event: error\ndata: {\"type\":\"error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}\n\n";
+            let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_EVENT.as_bytes()))).await;
+            if acc.chars().count() < LOG_RESP_CAP {
+                acc.push_str(TRUNC_EVENT);
             }
         }
         let fin = stream.finish();
@@ -1040,7 +1089,7 @@ async fn responses_endpoint(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()
