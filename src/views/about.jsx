@@ -122,7 +122,7 @@ export default function AboutPage() {
     <div className="about-wrap">
       <div className="about-card">
         <div className="about-brand">
-          <span className="about-mark">Z·SWITCH</span>
+          <span className="about-mark">Z·HUB</span>
           {appVer === ""
             ? <span className="about-ver-skel" aria-label={t("a.verLabel")} />
             : appVer !== "-" && <span className="about-ver">v{appVer}</span>}

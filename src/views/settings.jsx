@@ -163,7 +163,7 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
 
   useEffect(() => {
     // 只在语言变化时需要同步标题；无依赖数组会让输入框每键重跑一次
-    document.title = `Z·SWITCH ${t("s.title")}`;
+    document.title = `Z·HUB ${t("s.title")}`;
   }, [lang()]);
 
   if (loadErr) {
@@ -295,7 +295,7 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
     <>
       {!embedded && (
         <header className="topbar">
-          <div className="wordmark">Z·SWITCH <span className="ver">/ {t("s.title")}</span></div>
+          <div className="wordmark">Z·HUB <span className="ver">/ {t("s.title")}</span></div>
         </header>
       )}
       <section className="settings open">

@@ -60,7 +60,7 @@ function SideNav({ view, setView, s, unsaved }) {
   return (
     <aside className="sidenav">
       <div className="side-logo">
-        Z·SWITCH{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
+        Z·HUB{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
       </div>
       <button
         className={"side-item" + (view === "dashboard" ? " on" : "")}
