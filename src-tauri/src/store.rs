@@ -99,7 +99,35 @@ impl Paths {
         Paths { home, data_root }
     }
 
-    pub fn store_dir(&self) -> PathBuf { self.home.join(".zcode-switch") }
+    pub fn store_dir(&self) -> PathBuf {
+        // 2026-11-03 项目更名 zcode-switch → zcode-hub：数据目录随之迁移。
+        // 策略（首启一次性迁移，用户无感）：
+        //   新目录 ~/.zcode-hub 已存在 → 直接用（迁移已完成，旧目录不再读取）
+        //   新目录不存在 且 旧目录 ~/.zcode-switch 存在 → 原子改名旧目录为新目录
+        //     （同盘 rename，瞬完成且不复制凭据库；旧目录随改名消失，
+        //      回滚 = 把 ~/.zcode-hub 改回 ~/.zcode-switch）
+        //   两者都无 → 返回新目录（首装，ensure_dirs 创建）
+        // 失败回退：改名失败（占用/权限）时读旧目录继续跑，下次启动重试。
+        // 逃逸口：ZCODE_SWITCH_DATA_ROOT / ZCODE_SWITCH_HOME 重定向路径不受迁移影响。
+        let new_dir = self.home.join(".zcode-hub");
+        let old_dir = self.home.join(".zcode-switch");
+        if new_dir.exists() {
+            return new_dir;
+        }
+        if old_dir.exists() {
+            match std::fs::rename(&old_dir, &new_dir) {
+                Ok(()) => {
+                    eprintln!("[zhub] 数据目录已迁移: {} -> {}", old_dir.display(), new_dir.display());
+                    return new_dir;
+                }
+                Err(e) => {
+                    eprintln!("[zhub] 数据目录迁移失败（下次启动重试）: {e}");
+                    return old_dir;
+                }
+            }
+        }
+        new_dir
+    }
     pub fn accounts_dir(&self) -> PathBuf { self.store_dir().join("accounts") }
     pub fn settings_file(&self) -> PathBuf { self.store_dir().join("settings.json") }
     pub fn zcode_dir(&self) -> PathBuf { self.data_root.join(".zcode") }
