@@ -196,3 +196,50 @@ action_type ∈ ["confirm", "cancel"]    // confirm=领取，cancel=忽略投放
 - 桌面端当天自身请求零拦截（billing/claim、touch、balance 全正常）——桌面完整头族 + host 网络栈是可信形状；
 - 裸号 200 空 reply = 上游接受但无额度可路由；
 - 批次投放池全局共享先到先得（1103 批开放后 3 分钟内被抢空），`deliveries` 为空属池耗尽而非版本/形状问题。
+
+## 8. 完整链路总图（端到端）
+
+```
+① 发现可领（touch 轮询，稳态 ~2 次/小时）
+   GET /api/v1/marketing/touch?seq=<递增，首查 0>
+   头：X-Device-Mid + X-Client-Language + X-ZCode-App-Version + Authorization Bearer
+   注意：桌面端 URL 只带 seq，版本/平台只在头里（zsw 额外带 query 参数，服务端兼容）
+   响应 ≤32 deliveries，parse 按 resource_position 去重（banner/popup 各保留一条）
+   可领判定：buttons[].action.type == "claim_zcode_plan"（args.plan_id）
+
+② 领取入口
+   getRequestVerificationConfig → GET /api/v1/client/configs → data.configs.captcha
+   形状：{ enabled, sceneId, region, prefix, skip_model_request? }
+
+③ 验证码（硬前置，claim 严格排在 lastSdkEvent:"success" 之后）
+   预热：host 启动即装载 SDK（实测 10.4s 就绪），正式验证复用预热实例（388ms）
+   失败重试环：device_api 双端点轮换（cloudauth-device-dualstack / device.saf），
+   单点失败不阻塞；产物 captchaVerifyParam
+
+④ claim 本体（133ms 实测）
+   POST /api/v1/zcode-plan/billing/claim
+   头：Authorization Bearer + X-Aliyun-Captcha-Verify-Param（恒发）
+       + X-Aliyun-Captcha-Verify-Region（条件）+ X-ZCode-App-Version + X-Platform
+   载荷 {"plan_id"}；超时 15s（da=15e3）
+
+⑤ 后置链
+   成功：POST /marketing/touch/action {campaign_id, action_type:"confirm"}
+        → touch.query（确认投放清空）→ billing/balance → getEntitlementSnapshot
+   失败：任意码回读 data.plan.ends_at → failureEndsAt（前端冷却展示）
+        被判 security_verification_required → 回到 ③ 重试
+
+⑥ 错误码族（zsw failure_message 映射）
+   401（无凭据）/ 1001–1005（业务态，1005=计划期内重复领取）/ 3001、3007 / -1（网络/解析）
+   服务器 msg 优先展示，本地文案兜底
+```
+
+### zsw ↔ 桌面 步骤映射
+
+| 桌面端 | zcode-switch | 备注 |
+|---|---|---|
+| touch.query（marketing-touch.query RPC） | `claim.rs touch_plans`（TOUCH_SEQ 递增） | seq 对齐 |
+| getRequestVerificationConfig | `claim_captcha_config` / `fetch_captcha_config` | 同源 client/configs |
+| captcha SDK（渲染层预热+无痕） | `src/captcha.js`（独立窗口，无痕+人工兜底） | 预热差异，见 §6 |
+| claimManualPlan | `claim.rs submit_claim` | 头/载荷/双分支返回全对齐 |
+| marketing-touch.report | `claim.rs touch_report`（confirm） | `29bf710` |
+| balance/snapshot 刷新 | `claim_refresh`（touch 单通道，preview 默认关） | §1.5 |
