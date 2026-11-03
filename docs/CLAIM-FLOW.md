@@ -48,18 +48,19 @@ function D7(t) {
 
 配套常量：`$7 = "coding_plan_security_verification_required"`（服务端要求验证码的错误码）；`QD = ["X-Aliyun-Captcha-Verify-Param","X-Aliyun-Captcha-Verify-Region"]`（重试时的头白名单）。
 
-## 1.5 preview 通道：桌面端仍在用（修正认知）
+## 1.5 preview 通道：注册但今日零调用（修正认知）
 
-`getManualClaimPlanPreviews`（host/index.js）——桌面端手动领取 UI 的数据源之一：
+`getManualClaimPlanPreviews`（host/index.js）在 asar 里注册了完整实现：
 
 ```
 GET /api/v1/zcode-plan/billing/preview?app_version=3.17.2&platform=win32-x64
-鉴权 Authorization: Bearer <credentialService.load("zcodejwttoken")>
+鉴权 Authorization: Bearer <credentialService.load(QO)>   // QO = "zcodejwttoken"
 返回 { code, data: { server_time, plans: [{plan_id, name, description, priority, ...}] } }
 ```
 
-- 凭据键 `QO = "zcodejwttoken"`（credentialService.load 的 key，claim 同源）；
-- **zsw 侧「preview 恒空、已整体删除」的结论要修正**：恒空是我们在无投放环境实测的表象；桌面端手动领取 UI 把 preview 作为常驻数据源保留。zsw 刷新主路径不打 preview 仍是合理取舍（已知 429 高发端点），但它并非服务端已废弃的通道。
+**但 2026-11-03 全天日志实测：RPC 0 次调用、`billing/preview` HTTP 0 次出现**——5 次真实领取全程（19:08–19:11）都没有走它。`coding-plan-subscription.*` 当天全量 RPC 清单：getEnterprisePricing ×127、getStaticTeamProducts ×84、getBillingDiscount ×30、getDynamicWorkflowClientConfig ×27、getStaticProducts ×18、getRequestVerificationConfig ×12、claimManualPlan ×5——**无 preview**。
+
+结论：handler 注册 ≠ 实际调用。桌面端领取链路的前置数据源**唯一是 touch.query**，preview 注册在那属于某个当日未触发的 UI 面（疑似订阅页）。zsw「刷新主路径不打 preview」的设计与桌面实测行为完全一致。
 
 ## 1.6 请求验证（security verification）机制
 
@@ -175,7 +176,7 @@ action_type ∈ ["confirm", "cancel"]    // confirm=领取，cancel=忽略投放
 
 桌面端 `marketing/touch` 的 `seq` 为**模块级递增计数器**（asar：`Xde=0, seq=String(Xde++)`，首查发 0），非固定值。zcode-switch 已对齐（`claim.rs` `TOUCH_SEQ: AtomicU64`，首查 0 递增）。
 
-投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；`preview` 通道在无投放环境实测恒空（含五个已领到的号），zsw 刷新主路径不打它——但桌面端手动领取 UI 仍以 preview 为常驻数据源（见 §1.5），两通道并存，preview 非服务端废弃。
+投放判定：`deliveries[].buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的权威信号；`preview` 通道今日 5 次领取零调用（见 §1.5），领取链路的前置数据源唯一是 touch.query——zsw 主路径不打 preview 与桌面实测行为一致。
 
 ## 6. 桌面端 vs zcode-switch 差异清单（2026-11-03 全部对齐）
 
