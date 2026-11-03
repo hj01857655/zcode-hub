@@ -1,5 +1,0 @@
-# version_family_bisect 2026-11-01
-X-ZCode-App-Version+X-Platform+X-Release-Channel -> 405
-X-ZCode-App-Version -> 405
-confirm X-ZCode-App-Version -> 405
-base-only -> 200

@@ -1,9 +1,0 @@
-# header_bisect 2026-11-01
-
-| BASELINE thin | AaronWallace42 | 200 | '2' |
-| REFERRER | NazSuno19142 | 200 | '2' |
-| DEVICE_MID | hjj09903@gmail.com | 200 | '2' |
-| REQUEST_ID | yrs1rgxk | 200 | '2' |
-| ANTHROPIC_VERSION | 2061247340@qq.com | 200 | '2' |
-
-全组通过：3012 为时点性/状态性
