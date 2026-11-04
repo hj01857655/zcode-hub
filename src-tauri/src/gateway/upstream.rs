@@ -116,6 +116,26 @@ pub async fn messages_stream(
             .collect();
         return Err(UpstreamError { status, body });
     }
+    // HTTP 200 但 body 是 JSON 错误体（非 SSE）：上游的计费/风控闸偶尔用 200 包业务错误
+    //（11-04 实锤：1005 "exceed quota limit" 以 200+JSON 形态返回）。content-type 与
+    // 首字节判定——JSON 错误体转 UpstreamError（带 HTTP 200 + 原始 body），让 pool_send
+    // 走既有错误路径（冷却/换号/错误透传），而不是被当 SSE 流透传 + 截断检测误合成 overloaded_error。
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if ct.contains("json") {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(4096)
+            .collect();
+        return Err(UpstreamError { status, body });
+    }
     Ok(resp)
 }
 
@@ -129,6 +149,7 @@ pub fn cooldown_secs(status: u16, body: &str) -> u64 {
         _ if body.contains("3012") => 10 * 60,
         _ if body.contains("3007") => 60, // 安全验证：body code（HTTP 400），确定性拒绝，不冷却会拿固定 JWT 无限重打
         _ if body.contains("3008") || body.contains("3009") || body.contains("3010") => 60,
+        _ if body.contains("1005") => 10 * 60, // exceed quota limit（HTTP 200 包业务错误，11-04 实锤）：额度耗尽确定性拒绝，短冷却会无限重打
         _ if (500..600).contains(&status) => 30,
         _ => 0,
     }
