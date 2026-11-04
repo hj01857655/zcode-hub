@@ -94,12 +94,15 @@ export function tierBadges(data) {
 export function grantLabel(plan) {
   const items = plan.grant_items || [];
   if (items.length) {
-    const g = items[0];
-    return t("q.grant", {
-      name: g.name,
-      amount: fmtTokens(g.units),
-      period: t(`q.period.${g.period}`, {}) === `q.period.${g.period}` ? g.period : t(`q.period.${g.period}`, {}),
-    });
+    // 多权益桶（如 3 亿 token + 时长）逐条拼，只取第一条会把其余权益吞掉
+    const parts = items.map((g) =>
+      t("q.grant", {
+        name: g.name,
+        amount: fmtTokens(g.units),
+        period: t(`q.period.${g.period}`, {}) === `q.period.${g.period}` ? g.period : t(`q.period.${g.period}`, {}),
+      })
+    );
+    return parts.join(" + ");
   }
   return (plan.grants || [])[0] || "";
 }
