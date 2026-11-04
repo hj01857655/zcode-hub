@@ -1392,6 +1392,43 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         .unwrap_or_default();
 
     let mut loose: Vec<QuotaItem> = vec![];
+
+    // 桶兑底：balances[] 为空时（新领批次未消费，服务端只在 entitlements 里报 grant），
+    // 从对应计划的 entitlements 合成桶条目——total=grant_units、remaining=grant_units；
+    // balances[] 有数则跳过（避免与用量行双计）。daily_night 桶打夜间窗口标签
+    for s in &mut slots {
+        if !s.items.is_empty() {
+            continue;
+        }
+        let ents = balance
+            .get("plans")
+            .and_then(|p| p.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|pl| pl.get("plan_id").and_then(Value::as_str) == Some(s.pid.as_str()))
+                    .and_then(|pl| pl.get("entitlements").and_then(Value::as_array))
+                    .cloned()
+            })
+            .unwrap_or_default();
+        for e in ents {
+            let total = e.get("grant_units").and_then(to_number);
+            let Some(total) = total else { continue };
+            let period = e.get("period").and_then(Value::as_str).unwrap_or("");
+            s.items.push(QuotaItem {
+                name: e.get("show_name").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
+                total: Some(total),
+                used: None,
+                remaining: Some(total),
+                percent_used: None,
+                server_percentage: None,
+                unit: e.get("unit_type").and_then(Value::as_str).unwrap_or("quota").to_string(),
+                period_end: None,
+                window: if period == "daily_night" { Some("夜间".into()) } else { None },
+                ..Default::default()
+            });
+        }
+    }
+
     let any_pid = balance
         .get("balances")
         .and_then(|b| b.as_array())
