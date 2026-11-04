@@ -150,10 +150,10 @@ export default function AboutPage() {
           <p>{t("a.safetyDetail")}</p>
         </div>
 
-        <a className="about-repo" href="https://github.com/hj01857655/zcode-switch" target="_blank" rel="noopener"
-          onClick={(e) => { e.preventDefault(); invoke("open_external", { url: "https://github.com/hj01857655/zcode-switch" }).catch(() => {}); }}>
+        <a className="about-repo" href="https://github.com/hj01857655/zcode-hub" target="_blank" rel="noopener"
+          onClick={(e) => { e.preventDefault(); invoke("open_external", { url: "https://github.com/hj01857655/zcode-hub" }).catch(() => {}); }}>
           <span className="about-repo-line">{t("a.repoLabel")}</span>
-          <span className="about-repo-url">github.com/hj01857655/zcode-switch</span>
+          <span className="about-repo-url">github.com/hj01857655/zcode-hub</span>
           <span className="about-repo-desc">{t("s.githubLink")}</span>
         </a>
 
