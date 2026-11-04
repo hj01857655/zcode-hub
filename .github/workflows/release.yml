@@ -111,10 +111,10 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           # 指定 --target 时产物在 target/<triple>/release，native 时在 target/release
           if [ -n "$RUST_TARGET" ]; then BUILD_DIR="src-tauri/target/$RUST_TARGET/release"; else BUILD_DIR="src-tauri/target/release"; fi
-          cp "$BUILD_DIR/zcode-switch.exe" "zcode-switch_${VER}_${ARCH}_portable.exe"
+          cp "$BUILD_DIR/zcode-hub.exe" "zcode-hub_${VER}_${ARCH}_portable.exe"
           SETUP=$(ls "$BUILD_DIR"/bundle/nsis/*-setup.exe | head -1)
-          sha256sum "zcode-switch_${VER}_${ARCH}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt"
-          gh release upload "$GITHUB_REF_NAME" "zcode-switch_${VER}_${ARCH}_portable.exe" "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
+          sha256sum "zcode-hub_${VER}_${ARCH}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt"
+          gh release upload "$GITHUB_REF_NAME" "zcode-hub_${VER}_${ARCH}_portable.exe" "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
 
       - name: Upload checksums
         if: runner.os != 'Windows'
