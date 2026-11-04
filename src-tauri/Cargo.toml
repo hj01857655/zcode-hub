@@ -1,6 +1,6 @@
 [package]
 name = "zcode-hub"
-version = "1.9.3"
+version = "1.9.4"
 description = "ZCode 多账号工作台 · 切换 / 额度 / 领取 / 网关"
 license = "MIT"
 edition = "2021"
