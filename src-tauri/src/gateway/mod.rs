@@ -3,6 +3,7 @@
 pub mod config;
 pub mod openai;
 pub mod pool;
+pub mod provider;
 pub mod responses;
 pub mod server;
 pub mod translate;

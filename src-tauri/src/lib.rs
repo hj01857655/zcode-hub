@@ -1410,6 +1410,8 @@ pub fn run() {
             gateway_start,
             gateway_stop,
             gateway_status,
+            provider_fetch_models,
+            provider_test,
             gateway_log_history,
         ]))
         .on_window_event(|window, event| {
@@ -1579,6 +1581,22 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         "logToDisk": cfg.log_to_disk,
         "logFileMaxMb": cfg.log_file_max_mb,
     }))
+}
+
+/// 供应商页动作（magpie 式）：获取模型——有 key 拉 /v1/models，无 key 回缓存
+#[tauri::command]
+async fn provider_fetch_models(provider_id: String) -> Result<serde_json::Value, String> {
+    gateway::provider::fetch_models(&provider_id).await
+}
+
+/// 供应商页动作：右键测试——tiny 请求（8 token），返回 {ok, status, ms, error, model}；
+/// zcode 上游可指定账号单测（account_id），测试完全绕开池轮转/熔断
+#[tauri::command]
+async fn provider_test(
+    provider_id: String,
+    account_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    gateway::provider::test_provider(&provider_id, account_id).await
 }
 
 /// 日志历史：读 gateway.jsonl 尾部（独立日志页用，全量而非内存环 200 条）

@@ -45,7 +45,39 @@ pub struct GatewayConfig {
     /// 日志文件超过此大小（MB）轮转为 gateway.jsonl.1
     #[serde(default = "d_log_max")]
     pub log_file_max_mb: u64,
+    /// 上游供应商清单（首个 = 默认上游，现有路由继续走它；结构为多上游预留）
+    #[serde(default = "d_providers")]
+    pub providers: Vec<ProviderConfig>,
 }
+
+/// 上游供应商：magpie 式供应商页的数据模型——条目可展开、可拉模型、可右键测试
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    /// 调用该上游的凭据（zcode 上游为账号池 token，此处仅存展示用占位；掩码显示）
+    #[serde(default)]
+    pub api_key: String,
+    /// 「获取模型」的结果缓存
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+impl ProviderConfig {
+    /// 默认上游：现有网关行为不动，只是把硬编码的 zcode.z.ai 收进结构
+    pub fn zcode_default() -> Self {
+        Self {
+            id: "zcode".into(),
+            name: "ZCode".into(),
+            base_url: "https://zcode.z.ai".into(),
+            api_key: String::new(),
+            models: vec!["GLM-5.3-Flash".into(), "GLM-5.3".into()],
+        }
+    }
+}
+
+fn d_providers() -> Vec<ProviderConfig> { vec![ProviderConfig::zcode_default()] }
 
 fn d_connect() -> u64 { 15 }
 fn d_retries() -> u32 { 1 }
@@ -77,6 +109,7 @@ impl Default for GatewayConfig {
             body_limit_mb: d_body_limit(),
             log_to_disk: d_true(),
             log_file_max_mb: d_log_max(),
+            providers: d_providers(),
         }
     }
 }

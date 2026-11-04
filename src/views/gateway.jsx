@@ -50,6 +50,10 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   // key 显隐：默认打码（••••），眼睛切换
   const [showKey, setShowKey] = useState(false);
   const [copiedEp, setCopiedEp] = useState(false);
+  // 供应商条目（magpie 式）：展开看上游/模型面，获取模型 + 右键测试
+  const [provOpen, setProvOpen] = useState(false);
+  const [provBusy, setProvBusy] = useState(false);
+  const [provResult, setProvResult] = useState(null);
 
   const copyEndpoint = async () => {
     try { await navigator.clipboard.writeText(endpointInput); setCopiedEp(true); setTimeout(() => setCopiedEp(false), 1200); } catch { /* noop */ }
@@ -221,6 +225,18 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     try { await navigator.clipboard.writeText(accessCurl); setCopiedEx(true); setTimeout(() => setCopiedEx(false), 1200); } catch { /* noop */ }
   };
 
+  // 供应商动作（magpie 式）：获取模型（回缓存/拉取）+ 右键测试（tiny 请求，独立直连不碰池）
+  const doFetchModels = () => guard(async () => {
+    const r = await invoke("provider_fetch_models", { providerId: "zcode" });
+    await refresh();
+    toast(t("x.fetchedModels", { n: (r.models || []).length }));
+  });
+  const doProvTest = () => guard(async () => {
+    setProvResult({ testing: true });
+    const r = await invoke("provider_test", { providerId: "zcode", accountId: null });
+    setProvResult(r);
+  });
+
   return (
     <>
       <header className="topbar">
@@ -317,6 +333,36 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                 : null}
             </>
           : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.poolEmpty")}</span></div>}
+
+        {/* 供应商条目（magpie 式）：展开看上游/模型面，获取模型 + 右键测试（tiny 请求独立直连不碰池） */}
+        <div
+          className="x-pool-line"
+          style={{ marginTop: 14 }}
+          onClick={() => setProvOpen(!provOpen)}
+          onContextMenu={(e) => { e.preventDefault(); if (!provBusy) doProvTest(); }}
+          title={t("x.provTest") + "（右键）"}
+        >
+          <Ic name="sliders" size={14} />
+          <span>ZCode · zcode.z.ai</span>
+          {provBusy
+            ? <span className="x-pool-tag">{t("x.provTesting")}</span>
+            : provResult && !provResult.testing
+              ? provResult.ok
+                ? <span className="x-pool-tag ok">{t("x.provOk", { ms: provResult.ms })}</span>
+                : <span className="x-pool-tag warn" title={String(provResult.error || "")}>
+                    {t("x.provFail", { status: provResult.status ?? "—", error: String(provResult.error || "").slice(0, 24) })}
+                  </span>
+              : null}
+          <span className="x-pool-caret">{provOpen ? "▾" : "▸"}</span>
+        </div>
+        {provOpen
+          ? <div className="x-pool-models">
+              {(status?.models?.length ? status.models : []).map((n) => <span key={n} className="x-pool-tag model">{n}</span>)}
+              <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
+                <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
+              </button>
+            </div>
+          : null}
       </section>
 
       {tuneOpen
