@@ -1,0 +1,52 @@
+/* mac.css — macOS 玻璃界面的样式隔离层。
+   全部选择器限定在 html.mac 下（main.jsx 按 UA 挂类），Windows/Linux 零影响。
+
+   玻璃分工：原生玻璃层（glass.rs）画在 WKWebView 下方、取样桌面/窗口底色，
+   网页内对应区域只负责：镂空（不画底色）+ 文字/交互。底色变量 --glass-base
+   必须与 glass.rs 的 BASE_DARK/BASE_LIGHT 一致。 */
+
+html.mac {
+  --glass-base-dark: #0a0a0c;
+  --glass-base-light: #efeff2;
+}
+
+/* 侧栏：不画底色，玻璃层透出来；保留分隔线与文字 */
+html.mac .sidenav {
+  background: transparent;
+  border-right-color: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+/* 主背景：html/body 的渐变底色在玻璃布局下会让侧栏区域二次遮挡玻璃，
+   mac 下改为透明，底色统一交给原生底色层 */
+html.mac html,
+html.mac body {
+  background: transparent;
+}
+html.mac body {
+  background: transparent;
+}
+
+/* 顶栏拖拽区：Overlay 标题栏下系统拖拽区不可用，按上游经验把标题栏区域
+   与侧栏顶部标为可拖拽；交互元素标 no-drag 保住点击 */
+html.mac .sidenav .side-logo,
+html.mac .drag-region {
+  -webkit-app-region: drag;
+}
+html.mac button,
+html.mac input,
+html.mac a,
+html.mac .row-actions,
+html.mac .acc-item,
+html.mac .side-item,
+html.mac .side-qbtn {
+  -webkit-app-region: no-drag;
+}
+
+/* 浅色主题底色变量（glass.rs 按 dark 标志取对应常量，这里是 CSS 侧镜像） */
+html.mac[data-theme="light"] {
+  --glass-base: var(--glass-base-light);
+}
+html.mac[data-theme="dark"],
+html.mac:not([data-theme="light"]) {
+  --glass-base: var(--glass-base-dark);
+}

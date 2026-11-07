@@ -1,6 +1,8 @@
 
 /* Tailwind v4 接入层见 ./tailwind.css（专属语法集中那里，本文件只留一行普通 import） */
 @import "./tailwind.css";
+/* macOS 玻璃界面隔离层：全部选择器限定 html.mac，Windows/Linux 零影响 */
+@import "./mac.css";
 
 :root {
   --bg: #16171b;

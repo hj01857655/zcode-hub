@@ -3,6 +3,9 @@ pub mod cli;
 pub mod i18n;
 mod claim;
 mod flowlog;
+// 全平台编译：glass.rs 内部 cfg 守卫（mac 原生层在 cfg(target_os) 的 mod mac 内，
+// 其余平台 glass_sync 空操作），generate_handler 注册的命令宏需要模块恒在
+mod glass;
 mod oauth;
 mod probe;
 mod quota;
@@ -19,6 +22,8 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::AutoLaunchManager;
 use tauri_plugin_dialog::DialogExt;
+
+use glass::glass_sync;
 
 const TRAY_ID: &str = "main";
 
@@ -177,6 +182,10 @@ pub fn rebuild_tray(app: &AppHandle) {
 
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // macOS 玻璃：幂等安装——show_main 在启动与单实例二次拉起都会走，
+        // install 内部按窗口 label 注册，重复调用只会重铺底色帧
+        #[cfg(target_os = "macos")]
+        glass::install(&w);
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -1453,6 +1462,7 @@ pub fn run() {
         .invoke_handler(gated_handler(tauri::generate_handler![
             get_state,
             app_version,
+            glass_sync,
             capture_current,
             rename_account,
             delete_account,
@@ -1514,11 +1524,55 @@ pub fn run() {
                     let _ = window.app_handle().emit("captcha://closed", ());
                 }
             }
+            if let tauri::WindowEvent::Destroyed { .. } = event {
+                // macOS 玻璃：窗口销毁后释放原生面板注册（非 mac 为空操作）
+                glass::forget(window.app_handle(), window.label());
+            }
         })
         .setup(|app| {
             i18n::init_from_settings(&store::load_settings(&Paths::detect()));
             if let Ok(data_dir) = app.path().app_local_data_dir() {
                 flowlog::init(&data_dir);
+            }
+            // macOS 玻璃基建：主窗由 tauri.conf.json 声明（跨平台共用），透明/Overlay
+            // 标题栏只对 macOS 生效——conf 的 windows 数组不分平台，运行时按平台追加。
+            // set_transparent 无运行时 API，透明窗口必须创建期设置 → conf 的 windows
+            // 数组不能承载主窗透明，改由代码创建主窗（下方 cfg 分支），conf 声明移除
+            #[cfg(target_os = "macos")]
+            {
+                let win = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("Z·HUB")
+                .inner_size(1040.0, 640.0)
+                .min_inner_size(760.0, 560.0)
+                .resizable(true)
+                .transparent(true)
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .build()?;
+                glass::install(&win);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                // 非 macOS 主窗：照 conf 声明的属性代码创建（conf windows 数组只留
+                // mac 用不到的默认项也行，但为单一来源改为全代码创建，conf 留空数组）
+                let win = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("Z·HUB")
+                .inner_size(1040.0, 640.0)
+                .min_inner_size(760.0, 560.0)
+                .resizable(true)
+                .center()
+                .theme(Some(tauri::Theme::Dark))
+                .background_color(tauri::window::Color(10, 10, 12, 255))
+                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI --no-proxy-server")
+                .build()?;
+                let _ = win;
             }
             // 应用内更新：endpoint 与公钥在 tauri.conf.json plugins.updater
             #[cfg(desktop)]

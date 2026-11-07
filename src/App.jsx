@@ -11,6 +11,7 @@ import {
 import { expireInfo, tierBadges } from "./lib/quotaView.js";
 import { toast } from "./components/ui-bus.js";
 import { stripErr } from "./lib/i18n.js";
+import { GlassPane } from "./components/GlassPane.jsx";
 import { AccountQuotaSlot, TierBadges } from "./components/QuotaView.jsx";
 import SettingsPage from "./views/settings.jsx";
 import AboutPage from "./views/about.jsx";
@@ -58,7 +59,7 @@ function SideNav({ view, setView, s, unsaved }) {
       ? unsaved ? t("m.status.unsaved") : t("m.status.safe")
       : t("m.status.loggedOut");
   return (
-    <aside className="sidenav">
+    <GlassPane id="sidebar" source="desktop" className="sidenav">
       <div className="side-logo">
         Z·HUB{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
       </div>
@@ -116,7 +117,7 @@ function SideNav({ view, setView, s, unsaved }) {
           </button>
         </span>
       </div>
-    </aside>
+    </GlassPane>
   );
 }
 

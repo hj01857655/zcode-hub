@@ -2582,6 +2582,7 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 
@@ -5829,6 +5830,11 @@ dependencies = [
  "bytes",
  "chrono",
  "iana-time-zone",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-quartz-core",
  "pbkdf2",
  "reqwest 0.12.28",
  "serde",

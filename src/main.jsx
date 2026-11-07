@@ -13,6 +13,14 @@ if (!document.documentElement.dataset.theme) {
 }
 applyNativeTheme(currentTheme());
 
+// macOS 玻璃：UA 嗅探挂 html.mac 类（mac.css 选择器作用域 + GlassSync 开关），
+// 初始化玻璃同步（其它平台为空操作）
+import { IS_MAC, initGlass } from "./lib/glass.js";
+if (navigator.userAgent.includes("Macintosh") && !IS_MAC) {
+  document.documentElement.classList.add("mac");
+}
+initGlass();
+
 const root = createRoot(document.getElementById("app"));
 root.render(
   <StrictMode>
