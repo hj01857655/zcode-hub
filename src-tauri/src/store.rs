@@ -2,6 +2,7 @@
 use crate::i18n::{tr, trf};
 use crate::quota;
 use crate::zcrypto;
+use crate::flowlog;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -117,11 +118,11 @@ impl Paths {
         if old_dir.exists() {
             match std::fs::rename(&old_dir, &new_dir) {
                 Ok(()) => {
-                    eprintln!("[zhub] 数据目录已迁移: {} -> {}", old_dir.display(), new_dir.display());
+                    flowlog::log("sys", "data-migrated", &format!("{} -> {}", old_dir.display(), new_dir.display()));
                     return new_dir;
                 }
                 Err(e) => {
-                    eprintln!("[zhub] 数据目录迁移失败（下次启动重试）: {e}");
+                    flowlog::log("sys", "data-migrate-fail", &format!("{}: {e}", old_dir.display()));
                     return old_dir;
                 }
             }
@@ -399,6 +400,7 @@ pub fn kill_zcode() -> Result<bool, String> {
     let removed = remove_zcode_tray_icons(&pids);
     if removed == 0 {
         eprintln!("[zsw] 未找到 ZCode 托盘图标（可能本来就无图标或窗口类变更），本次强杀可能残留幽灵图标");
+        flowlog::log("switch", "tray-icons-not-found", "强杀前未探测到 ZCode 托盘图标，本次可能残留幽灵图标");
     }
     let _ = no_window("taskkill")
         .args(["/F", "/IM", "ZCode.exe"])
@@ -554,6 +556,7 @@ pub fn kill_zcode() -> Result<bool, String> {
     // ③ 超时强杀：SIGKILL 无可拦截，托盘图标可能残留（与 Windows 强杀同因）
     if zcode_running() {
         eprintln!("[zsw] ZCode 优雅关闭超时 {}s，回退 SIGKILL（本次可能残留托盘幽灵图标）", GRACEFUL_EXIT_TIMEOUT.as_secs());
+        flowlog::log("switch", "graceful-timeout-sigkill", &format!("优雅关闭超时 {}s，回退 SIGKILL", GRACEFUL_EXIT_TIMEOUT.as_secs()));
         for name in ["zcode", "ZCode"] {
             let _ = no_window("pkill").args(["-9", "-x", name]).output();
         }
@@ -614,6 +617,7 @@ pub fn open_url(url: &str) -> Result<(), String> {
 pub fn load_settings(paths: &Paths) -> Settings {
     match fs::read_to_string(paths.settings_file()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            flowlog::log("sys", "settings-corrupt-fallback", &e.to_string());
             eprintln!("settings.json 损坏，已回退默认值：{e}");
             Settings::default()
         }),

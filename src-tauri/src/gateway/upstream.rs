@@ -58,6 +58,7 @@ pub fn note_risk_response(status: u16, body: &str) {
         return; // 手动钉版本做归因实验时不介入，保持实验环境可控
     }
     if !VERSION_DOWNGRADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        crate::flowlog::log("gateway", "version-downgraded", &format!("{SAFE_APP_VERSION} 撞风控（{status}）→ {FALLBACK_APP_VERSION}"));
         eprintln!("[gateway] 版本自述 {SAFE_APP_VERSION} 撞风控（{status}），锁存降级到 {FALLBACK_APP_VERSION}");
     }
 }

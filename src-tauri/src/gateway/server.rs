@@ -73,10 +73,12 @@ pub async fn serve(
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
+            crate::flowlog::log("gateway", "bind-fail", &format!("{addr}: {e}"));
             eprintln!("[gateway] bind {addr} failed: {e}");
             return;
         }
     };
+    crate::flowlog::log("gateway", "serving", &addr.to_string());
     eprintln!("[gateway] serving on {addr}");
     // 启动预热：后台拉一次全池模型面，池面板/账号行不用等第一个请求才有模型数据
     {

@@ -17,6 +17,7 @@ import SettingsPage from "./views/settings.jsx";
 import AboutPage from "./views/about.jsx";
 import GatewayPage from "./views/gateway.jsx";
 import GatewayLogsPage from "./views/gateway-logs.jsx";
+import SysLogPage from "./views/syslog.jsx";
 import ReferralPage from "./views/referral.jsx";
 import DashboardPage from "./views/dashboard.jsx";
 import { quotaTotals, fmtTokens } from "./lib/quotaView.js";
@@ -86,6 +87,12 @@ function SideNav({ view, setView, s, unsaved }) {
         onClick={() => setView("gatewayLogs")}
       >
         <Ic name="list" size={16} /> {t("xl.menuLabel")}
+      </button>
+      <button
+        className={"side-item" + (view === "syslog" ? " on" : "")}
+        onClick={() => setView("syslog")}
+      >
+        <Ic name="gauge" size={16} /> {t("sl.menuLabel")}
       </button>
       <button
         className={"side-item" + (view === "referral" ? " on" : "")}
@@ -341,7 +348,7 @@ export default function App() {
   const [accFilter, setAccFilter] = useState("all");
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
-  const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
+  const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "syslog", "referral", "settings", "about"];
   // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
   const [view, setViewRaw] = useState(() => {
     const v = localStorage.getItem("zsw.view");
@@ -546,6 +553,11 @@ export default function App() {
         {view === "gatewayLogs" ? (
           <div className="settings-view">
             <GatewayLogsPage />
+          </div>
+        ) : null}
+        {view === "syslog" ? (
+          <div className="settings-view">
+            <SysLogPage />
           </div>
         ) : null}
         {view === "referral" ? (

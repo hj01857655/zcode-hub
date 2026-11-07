@@ -283,7 +283,7 @@ export default function GatewayLogsPage() {
   return (
     <>
       <header className="topbar">
-        <div className="wordmark">Gateway<span className="ver"> / {t("xl.title")}</span></div>
+        <div className="wordmark">Request<span className="ver"> / {t("xl.title")}</span></div>
       </header>
       <section className="toolbar">
         <button className="btn-ghost has-ic" onClick={reload}><Ic name="refresh" size={15} /> {t("xl.reload")}</button>

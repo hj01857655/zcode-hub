@@ -1785,6 +1785,14 @@ input:focus-visible,
 }
 .x-log-row.clickable { cursor: pointer; }
 .x-log-row.clickable:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+/* 系统日志页行：flow 标签 / 事件名 / 详情三段网格（复用 x-log-list 容器） */
+.x-log-row.sl-row { grid-template-columns: 140px 76px 180px 1fr; }
+.sl-flow { color: var(--ink-dim); font-family: var(--mono); flex: none; }
+.sl-event { color: var(--ink); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-detail { color: var(--ink-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 错误类事件整行着色（事件名匹配 fail/timeout/corrupt/downgraded 等） */
+.x-log-row.sl-err .sl-event { color: var(--red); }
+.x-log-row.sl-err .sl-detail { color: var(--red-dim, #8f3434); }
 .x-log-ts { color: var(--ink-mute); }
 .x-log-ep { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-log-acct { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

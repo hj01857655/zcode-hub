@@ -20,6 +20,19 @@ pub fn log(flow: &str, event: &str, detail: &str) {
     append(path, &format_line(flow, event, detail));
 }
 
+/// 读取日志尾部 n 行（系统日志页数据源；文件不存在返回空 Vec）。
+/// 行格式与 format_line 一致：`ts [flow] event detail`，前端按 [flow] 分组过滤。
+pub fn tail(n: usize) -> Vec<String> {
+    let Some(path) = LOG_PATH.get() else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+    let mut lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    if total > n {
+        lines.drain(0..total - n);
+    }
+    lines.into_iter().map(str::to_string).collect()
+}
+
 fn format_line(flow: &str, event: &str, detail: &str) -> String {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let tag: String = flow.chars().take(8).collect();

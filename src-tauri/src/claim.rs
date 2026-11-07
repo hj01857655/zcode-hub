@@ -349,7 +349,13 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
     }
     let resp = req
         .call()
-        .map_err(|e| http_err(&crate::i18n::tr("err.claim.touch_req"), e))?
+        .map_err(|e| {
+            let msg = http_err(&crate::i18n::tr("err.claim.touch_req"), e);
+            // 诊断摘要行：touch 拉取失败（429/3012 前哨/网络错）写 flowlog，
+            // 系统日志页可追溯「显示可领却领不了」「刷不出投放」类问题
+            crate::flowlog::log("claim", "touch-fail", &msg.split('\n').next().unwrap_or("").chars().take(120).collect::<String>());
+            msg
+        })?
         .into_string()
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
     let v: Value = serde_json::from_str(&resp)

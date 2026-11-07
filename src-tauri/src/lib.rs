@@ -438,9 +438,9 @@ async fn claim_captcha_submit(
                 })
                 .map(|s| if s == 0 { 0i64 } else { s * 1000 });
             let outcome = claim::ClaimOutcome {
-                account_id: aid,
-                account_name: aname,
-                plan_name: pname,
+                account_id: aid.clone(),
+                account_name: aname.clone(),
+                plan_name: pname.clone(),
                 starts_at: ms("starts_at"),
                 ends_at: ms("ends_at"),
                 effective_at,
@@ -448,6 +448,19 @@ async fn claim_captcha_submit(
             };
             let p = serde_json::to_value(&outcome).unwrap_or(Value::Null);
             let _ = app.emit("claim://result", &p);
+            // 诊断摘要行：领取成功写 flowlog（acct 掩码 / 套餐 / 生效时刻），
+            // 系统日志页可查全库领取历史
+            {
+                let acct_mask: String = aid.chars().take(8).collect();
+                let eff = effective_at
+                    .map(|ts| {
+                        chrono::DateTime::from_timestamp_millis(ts)
+                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| ts.to_string())
+                    })
+                    .unwrap_or_else(|| "unknown".into());
+                flowlog::log("claim", "claimed", &format!("acct={acct_mask}… plan={pname} effective={eff}"));
+            }
             // 桌面对齐（11-03 asar 实锤）：领取成功后上报投放动作 confirm；纯遥测，
             // 失败仅记日志不上抛——不影响领取结果
             if let Some(cid) = rep_campaign.as_deref() {
@@ -468,6 +481,13 @@ async fn claim_captcha_submit(
         Err(e) => {
             let p = claim::failure_payload(&aid, &aname, &pname, &e);
             let _ = app.emit("claim://result", &p);
+            // 诊断摘要行：领取失败写 flowlog（acct 掩码 / 业务码 / 消息短句），
+            // 3012 类风控事件的排障从这里进，不再靠猜
+            {
+                let acct_mask: String = aid.chars().take(8).collect();
+                let msg_short: String = e.message.split('\n').next().unwrap_or("").chars().take(120).collect();
+                flowlog::log("claim", "claim-failed", &format!("acct={acct_mask}… plan={pname} code={} msg={msg_short}", e.code));
+            }
             return Ok(p);
         }
     };
@@ -1507,6 +1527,7 @@ pub fn run() {
             provider_fetch_models,
             provider_test,
             gateway_log_history,
+            syslog_tail,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1604,6 +1625,7 @@ pub fn run() {
                 let want = gw.config.lock().map(|c| c.auto_start).unwrap_or(false);
                 if want {
                     if let Err(e) = gw.start() {
+                        flowlog::log("gateway", "autostart-fail", &e.to_string());
                         eprintln!("[gateway] 自启恢复失败: {e}");
                     }
                 }
@@ -1653,6 +1675,7 @@ async fn gateway_start(
         if let Some(v) = log_file_max_mb { if v > 0 && v <= 1024 { cfg.log_file_max_mb = v; } }
         // 落盘：不保存的话新端口/密钥重启即丢，UI 上的「保存」就成了骗局
         if let Err(e) = cfg.save() {
+            flowlog::log("gateway", "config-save-fail", &e.to_string());
             eprintln!("[gateway] 配置落盘失败: {e}");
         }
     }
@@ -1770,4 +1793,14 @@ async fn gateway_log_history() -> Result<Vec<serde_json::Value>, String> {
         }
         Ok(lines.into_iter().filter_map(|l| serde_json::from_str(&l).ok()).collect::<Vec<_>>())
     }).await.map_err(|e| e.to_string())?
+}
+
+/// 系统日志：flowlog 尾部行（oauth/claim/switch/gateway/sys 五个流的运维事件）。
+/// 行格式 `ts [flow] event detail`，前端按 [flow] 分组过滤与着色。
+#[tauri::command]
+async fn syslog_tail(n: Option<u32>) -> Result<Vec<String>, String> {
+    let n = n.unwrap_or(500).clamp(1, 2000) as usize;
+    tokio::task::spawn_blocking(move || Ok(flowlog::tail(n)))
+        .await
+        .map_err(|e| e.to_string())?
 }
