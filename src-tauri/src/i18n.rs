@@ -61,6 +61,7 @@ pub fn init_from_settings(s: &crate::store::Settings) {
 
 const ZH: &[(&str, &str)] = &[
     ("err.write", "写入失败：{e}"),
+    ("err.dialog", "打开文件对话框失败：{e}"),
     ("err.write_file", "写入失败 {path}: {e}"),
     ("err.rename_fail", "落盘失败 {path}: {e}"),
     ("err.read", "无法读取 {path}: {e}"),
@@ -229,6 +230,7 @@ const ZH: &[(&str, &str)] = &[
 
 const EN: &[(&str, &str)] = &[
     ("err.write", "Write failed: {e}"),
+    ("err.dialog", "Failed to open file dialog: {e}"),
     ("err.write_file", "Write failed {path}: {e}"),
     ("err.rename_fail", "Persist failed {path}: {e}"),
     ("err.read", "Cannot read {path}: {e}"),

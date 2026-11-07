@@ -1241,12 +1241,19 @@ async fn autostart_set(app: AppHandle, enable: bool) -> Result<bool, String> {
 async fn export_pick_path(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
     let acc = load_account(&Paths::detect(), &id)?;
     let default_name = format!("{}.zsb", sanitize_filename(&acc.name));
-    let picked = app
-        .dialog()
-        .file()
-        .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
-        .set_file_name(&default_name)
-        .blocking_save_file();
+    // blocking dialog 不能裸跑在 async runtime worker 上——对话框开着就占死一个
+    // worker（默认池小，几个并发导出就能卡住全部异步命令），丢 blocking 池执行
+    let app2 = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app2
+            .dialog()
+            .file()
+            .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
+            .set_file_name(&default_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| i18n::trf("err.dialog", &[("e", &e.to_string())]))?;
     let Some(fp) = picked else {
         return Ok(json!({ "picked": false }));
     };
@@ -1270,12 +1277,18 @@ async fn export_all_pick_path(app: AppHandle) -> Result<serde_json::Value, Strin
     if accounts.is_empty() {
         return Err(i18n::tr("err.export.empty"));
     }
-    let picked = app
-        .dialog()
-        .file()
-        .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
-        .set_file_name("zcode-accounts.zsb")
-        .blocking_save_file();
+    // blocking dialog 丢 blocking 池，不占 async worker（同 export_pick_path）
+    let app2 = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app2
+            .dialog()
+            .file()
+            .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
+            .set_file_name("zcode-accounts.zsb")
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| i18n::trf("err.dialog", &[("e", &e.to_string())]))?;
     let Some(fp) = picked else {
         return Ok(json!({ "picked": false }));
     };
@@ -1298,11 +1311,17 @@ async fn export_all_finalize(path: String, password: String) -> Result<serde_jso
 
 #[tauri::command]
 async fn import_pick_files(app: AppHandle) -> Result<serde_json::Value, String> {
-    let picked = app
-        .dialog()
-        .file()
-        .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
-        .blocking_pick_files();
+    // blocking dialog 丢 blocking 池，不占 async worker（同 export_pick_path）
+    let app2 = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app2
+            .dialog()
+            .file()
+            .add_filter(&i18n::tr("dialog.zsb"), &["zsb"])
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(|e| i18n::trf("err.dialog", &[("e", &e.to_string())]))?;
     let Some(files) = picked else {
         return Ok(json!({ "picked": false }));
     };
@@ -1364,11 +1383,17 @@ async fn import_sealed(app: AppHandle, files: Vec<(String, Value)>, password: St
 
 #[tauri::command]
 async fn pick_zcode_path(app: AppHandle) -> Result<serde_json::Value, String> {
-    let picked = app
-        .dialog()
-        .file()
-        .add_filter(&i18n::tr("dialog.exe"), &["exe"])
-        .blocking_pick_file();
+    // blocking dialog 丢 blocking 池，不占 async worker（同 export_pick_path）
+    let app2 = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app2
+            .dialog()
+            .file()
+            .add_filter(&i18n::tr("dialog.exe"), &["exe"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| i18n::trf("err.dialog", &[("e", &e.to_string())]))?;
     let Some(fp) = picked else {
         return Ok(json!({ "picked": false }));
     };

@@ -285,11 +285,21 @@ pub fn is_logged_in(v: &Value) -> bool {
 }
 
 pub fn atomic_write(path: &Path, data: &str) -> Result<(), String> {
+    use std::io::Write;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| trf("err.mkdir", &[("e", &e.to_string())]))?;
     }
     let tmp = path.with_extension(format!("tmp-{}", Uuid::new_v4().simple()));
-    fs::write(&tmp, data).map_err(|e| trf("err.write_file", &[("path", &path.display().to_string()), ("e", &e.to_string())]))?;
+    // 写 + flush + fsync 三步：rename 前必须保证数据已落盘。只 fs::write 不刷
+    // 的话，断电/崩溃时 rename 可能已生效而内容还在页缓存里——凭据/登录态文件
+    // 变成空壳或半截 JSON，重启后读回 bad_json。fsync 开销只在写盘瞬间，可接受
+    let mut f = fs::File::create(&tmp)
+        .map_err(|e| trf("err.write_file", &[("path", &path.display().to_string()), ("e", &e.to_string())]))?;
+    f.write_all(data.as_bytes())
+        .and_then(|_| f.flush())
+        .and_then(|_| f.sync_all())
+        .map_err(|e| trf("err.write_file", &[("path", &path.display().to_string()), ("e", &e.to_string())]))?;
+    drop(f);
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(trf("err.rename_fail", &[("path", &path.display().to_string()), ("e", &e.to_string())]));
