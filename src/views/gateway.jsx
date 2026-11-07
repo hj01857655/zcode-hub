@@ -6,6 +6,7 @@ import { t } from "../lib/i18n.js";
 import { toast } from "../components/ui-bus.js";
 import { Ic } from "../components/iconsx.jsx";
 import { GatewayTestModal } from "../components/gateway-test.jsx";
+import { useVisiblePolling } from "../lib/pageVisible.js";
 
 // 端点输入即配置：host 固定本机，端口从 URL 解析（省略端口 = 默认 8081）；解析失败返回 null
 const parseEndpoint = (s) => {
@@ -102,11 +103,9 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     }
   };
 
-  useEffect(() => {
-    refresh();
-    const timer = setInterval(() => refresh(), 2000);
-    return () => clearInterval(timer);
-  }, []);
+  // 可见性感知轮询：托盘/最小化时 2s 全速轮询降为 30s，回前台立即补拉
+  // （状态/池健康只在前台有意义，隐藏后全速轮询白打 IPC）
+  useVisiblePolling(refresh, 2000, 30000, []);
   useEffect(() => { tuneOpenRef.current = tuneOpen; }, [tuneOpen]);
   // 协议 tab 左右邻居切换（Alt+←/→，循环）：只管调用示例的 Chat/Responses/Messages；
   // 测试弹窗的协议切换由 GatewayTestModal 自己监听（open 时才挂）

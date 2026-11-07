@@ -2,6 +2,7 @@
 // 独立成页的原因：网关页已承载端点/协议/模型/池/配置/curl 六块，日志的全量历史、
 // 筛选、统计放不下——网关页只留内存环摘要，本页做运维面（筛选/聚合/详情）。
 import { useEffect, useMemo, useState } from "react";
+import { useVisiblePolling } from "../lib/pageVisible.js";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
@@ -215,12 +216,9 @@ export default function GatewayLogsPage() {
       .catch((e) => setErr(String(e)));
   };
   useEffect(() => { reload(); }, []);
-  // 自动刷新：5s 轮询 gateway_log_history，卸载或关闸即清
-  useEffect(() => {
-    if (!auto) return;
-    const id = setInterval(reload, 5000);
-    return () => clearInterval(id);
-  }, [auto]);
+  // 自动刷新：可见时 5s 全速轮询 gateway_log_history，托盘/最小化降为 30s 并在
+  // 回前台时立即补拉；关闸（auto=false）→ interval 0 = 完全不轮询（hook 语义）
+  useVisiblePolling(reload, auto ? 5000 : 0, 30000, [auto]);
 
   const eps = useMemo(() => [...new Set((logs || []).map((l) => l.ep))].sort(), [logs]);
   const filtered = useMemo(() => {
