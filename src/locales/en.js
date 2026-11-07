@@ -90,6 +90,7 @@ export const en = {
   "m.claimPendingTag": "Claimed (pending)",
   "m.claimHistoryTitle": "Local claim history (keyed by userId — survives re-login)",
   "m.claimHistoryLine": "Claimed at {time}",
+  "m.claimCooldownHint": "Account cooldown started (retry after {n} min) — auto-claim will skip it until then",
   "m.claimPendingTitle": "Plan claimed — credits arrive automatically at the effective time (inferred from billing/balance)",
   "m.claimPendingToast": "\"{name}\" claimed \"{plan}\" — waiting for activation",
   "m.claimStartsAt": "Expected to activate at {time} (per event description)",

@@ -328,10 +328,36 @@ async function refreshClaimBatch(ids, chunkGapMs, onOne) {
   }
 }
 
+// ---- 3012 退避表（per-account，SecurityReject 族独立于 429） ----
+// 3012/405（出口 IP/指纹级风控）连续命中冷却倍增：1h → 2h → 4h → 8h → 封顶 7 天；
+// 与 429 的 60s 基准表分开管——两者惩罚维度不同（IP 级 vs 请求级）。
+// 窗口衰减不做持久化：内存表随重启重置，等价于 7 天窗口的最简形态。
+const secReject3012Count = {};
+const SEC_REJECT_BASE_MS = 60 * 60 * 1000;        // 1h
+const SEC_REJECT_CAP_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
+
+// 领取失败退避分流：按结构化字段（httpStatus/bizCode）三轨判定——
+// HTTP 429（传输层限流）→ 60s 指数升级（复用 touch429Count 表）；
+// 业务限流（30xx，RateLimited 族）→ 60 分钟固定；
+// 3012/405（SecurityReject，body code=3012 或 HTTP 405 形态）→ 1h 指数倍增封顶 7 天；
+// 其余业务失败（1005 额度用完等）→ nextAt 权威或 60 分钟。
 function autoClaimCooldownFor(r) {
   const now = Date.now();
   // 权威冷却优先：任意失败码带 nextAt（data.plan.ends_at，桌面对齐）都用它
   if (r.nextAt) return r.nextAt;
+  const http = Number.isFinite(r.httpStatus) ? r.httpStatus : 0;
+  const biz = Number.isFinite(r.bizCode) ? r.bizCode : -1;
+  // HTTP 层 429：touch429Count 表的指数升级（60s→…→15min）
+  if (http === 429) return now + touchCooldownFor(r.accountId, "429");
+  // 业务码 3012 或 HTTP 405 形态（UPSTREAM-3012.md 实锤的拒绝形态）：SecurityReject 倍增
+  if (biz === 3012 || (http === 405 && biz >= 1000)) {
+    secReject3012Count[r.accountId] = (secReject3012Count[r.accountId] || 0) + 1;
+    const mult = Math.min(2 ** (secReject3012Count[r.accountId] - 1), SEC_REJECT_CAP_MS / SEC_REJECT_BASE_MS);
+    return now + SEC_REJECT_BASE_MS * Math.max(mult, 1);
+  }
+  // 业务限流族（3002/3008/3009/3010）：60 分钟固定（请求级惩罚，指数升级无证据支持）
+  if (biz >= 3000 && biz < 3100 && biz !== 3012) return now + 60 * 60 * 1000;
+  // 其余业务失败（1005 额度用完 / interactive）：60 分钟
   if (Number.isFinite(r.code) && r.code >= 1000) return now + 60 * 60 * 1000;
   if (r.code === "interactive") return now + 60 * 60 * 1000;
   return now + AUTO_CLAIM_INTERVAL_MS;
@@ -657,6 +683,13 @@ export const actions = {
       toast(t("m.claimVerify", { name: plan.name || plan.plan_id }), "ok", t("m.claimVerifyDetail"));
       const r = await waitForClaimResult(id);
       if (!r) toast(t("m.claimTimeout"), "warn");
+      // 领取失败按结构化字段分流退避（3012 倍增 / 业务限流固定 / HTTP 429），
+      // 与自动领取同表——手动撞墙也计入倍增计数，冷却期内自动领取照常跳号
+      if (r && r.ok === false) {
+        autoClaimCooldown[id] = autoClaimCooldownFor(r);
+        const waitMin = Math.max(1, Math.round((autoClaimCooldown[id] - Date.now()) / 60000));
+        toast(t("m.claimFailed", { name: r.accountName, code: Number.isFinite(r.code) && r.code >= 0 ? `[${r.code}] ` : "", msg: r.message || t("m.unknownErr") }), "err", t("m.claimCooldownHint", { n: waitMin }));
+      }
     } catch (e) {
       toast(stripErr(e), "err");
     } finally {

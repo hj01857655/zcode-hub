@@ -89,6 +89,12 @@ pub struct ClaimError {
     pub code: i64,
     pub message: String,
     pub next_at: Option<i64>,
+    /// HTTP 层状态码：业务层拒绝（HTTP 200 + 业务码）为 200，网络错为 0，未知 -1。
+    /// 前端退避分流用——HTTP 429 与业务限流（30xx）是两种不同的惩罚，退避策略不同
+    pub http_status: i64,
+    /// 业务码（响应体 JSON 的 code 字段）：HTTP 层错误（429/405/5xx）从 body 解析，
+    /// 业务层错误直接取。0 = 成功无此字段场景
+    pub biz_code: i64,
 }
 
 impl From<String> for ClaimError {
@@ -97,6 +103,8 @@ impl From<String> for ClaimError {
             code: -1,
             message,
             next_at: None,
+            http_status: 0,
+            biz_code: -1,
         }
     }
 }
@@ -112,6 +120,9 @@ fn claim_error(code: i64, body: &Value) -> ClaimError {
         code,
         message: failure_message(code, body),
         next_at,
+        // 业务层拒绝：HTTP 200 + 业务码
+        http_status: 200,
+        biz_code: code,
     }
 }
 
@@ -129,6 +140,8 @@ pub fn failure_payload(
         "code": err.code,
         "nextAt": err.next_at,
         "message": err.message,
+        "httpStatus": err.http_status,
+        "bizCode": err.biz_code,
     })
 }
 
@@ -506,16 +519,43 @@ pub fn submit_claim(
     }
     let resp = req
         .send_json(serde_json::json!({ "plan_id": plan_id }))
-        .map_err(|e| ClaimError {
-            code: -1,
-            message: http_err(&crate::i18n::tr("err.claim.claim_req"), e),
-            next_at: None,
+        .map_err(|e| {
+            // 官方客户端语义（asar 实锤 tc()/Yde()）：全部响应 body 均为 JSON——
+            // 含 405+3012 拒绝（{"code":3012,"msg":...}）与 HTTP 429。错误分支
+            // 两条轨并行：http_status（HTTP 层）+ biz_code（body 的 code 字段），
+            // 前端退避按这两轨分流，不猜字符串
+            let (status, body) = match e {
+                ureq::Error::Status(code, r) => (i64::from(code), r.into_string().unwrap_or_default()),
+                _ => (0, String::new()),
+            };
+            let biz = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
+                .unwrap_or(-1);
+            // 消息构造对齐官方 Yde()：body JSON 的 error/message/msg/detail 字段
+            // 优先，WAF HTML 页（官方 wX 同款判据）回退 "HTTP {status}"
+            let msg = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| ["error", "message", "msg", "detail"]
+                    .iter()
+                    .find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            ClaimError {
+                code: -1,
+                message: format!("{}: {msg}", crate::i18n::tr("err.claim.claim_req")),
+                next_at: None,
+                http_status: status,
+                biz_code: biz,
+            }
         })?
         .into_string()
         .map_err(|e| ClaimError {
             code: -1,
             message: crate::i18n::trf("err.http.read", &[("e", &e.to_string())]),
             next_at: None,
+            http_status: 0,
+            biz_code: -1,
         })?;
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp.clone()));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
