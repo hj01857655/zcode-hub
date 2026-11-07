@@ -99,7 +99,8 @@ html, body {
 .side-item:hover { background: var(--panel); color: var(--ink); }
 .side-item.on {
   background: var(--panel-2);
-  color: var(--amber);
+  color: var(--ink);
+  font-weight: 600;
   border-color: var(--hairline);
 }
 .side-foot {
