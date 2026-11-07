@@ -128,19 +128,34 @@ export default function SysLogPage() {
             ? <div className="x-log-list">
                 {filtered.map((p, i) => p.kind === "request"
                   ? <ReqEntry key={`r${i}`} p={p} />
-                  : (
-                  <div key={i} className={"x-log-row sl-row" + (isErrEvent(p.event) ? " sl-err" : "")}
-                    title={p.raw}>
-                    <span className="x-log-ts">{p.ts}</span>
-                    <span className="sl-flow">[{p.flow}]</span>
-                    <span className="sl-event">{p.event}</span>
-                    <span className="sl-detail" title={p.detail}>{p.detail}</span>
-                  </div>
-                  ))}
+                  : <TextRow key={`t${i}`} p={p} />)}
               </div>
             : <div className="dash-empty">{t("sl.empty")}</div>}
       </section>
     </>
+  );
+}
+
+// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开完整原文
+// （x-log-pre pre-wrap 全文块，与网关条目同一展开交互）。hover title 移除——
+// 2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
+function TextRow({ p }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={"x-log-item" + (open ? " expanded" : "")}>
+      <div className={"x-log-row sl-row clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
+        onClick={() => setOpen(!open)}>
+        <span className="x-log-ts">{p.ts}</span>
+        <span className="sl-flow">[{p.flow}]</span>
+        <span className="sl-event">{p.event}</span>
+        <span className="sl-detail">{p.detail}</span>
+      </div>
+      {open
+        ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
+            <pre className="x-log-pre">{p.raw}</pre>
+          </div>
+        : null}
+    </div>
   );
 }
 
