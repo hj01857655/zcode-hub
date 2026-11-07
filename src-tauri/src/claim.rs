@@ -156,10 +156,15 @@ fn decrypt_credential(v: &str, secret: &str) -> Option<String> {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(CLAIM_TIMEOUT_SECS))
-        .build()
+    // 共享单例：touch/claim/balance 同域高频请求，复用 keep-alive 连接
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout(Duration::from_secs(CLAIM_TIMEOUT_SECS))
+            .build()
+    })
+    .clone()
 }
 
 /// 账号的 user id（来自 oauth user_info 快照）。缺它说明快照不完整（旧版保存的登录），

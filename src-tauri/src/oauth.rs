@@ -55,10 +55,8 @@ pub fn init_flow(provider: &str, mid: &str) -> Result<FlowInit, String> {
 
 fn init_flow_at(url: &str, provider: &str, mid: &str) -> Result<FlowInit, String> {
     let poll_token = new_poll_token();
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build();
+    // init/exchange 与 poll 同域（zcode.z.ai），共享 Agent 复用 keep-alive 连接
+    let agent = web_agent_with(20);
     let mut req = agent.post(url);
     for (k, v) in quota::zai_oauth_headers_with_mid(&poll_token, Some(mid.to_string())).0 {
         req = req.set(&k, &v);
@@ -306,10 +304,7 @@ pub fn parse_proxy_url(input: &str) -> Result<String, String> {
 }
 
 pub fn exchange_token(provider: &str, code: &str, state: &str, mid: &str) -> Result<Value, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build();
+    let agent = web_agent_with(20);
     let mut req = agent.post(TOKEN_URL);
     for (k, v) in quota::zai_oauth_headers_with_mid("", Some(mid.to_string())).0 {
         if k == "Authorization" {
@@ -466,10 +461,29 @@ pub const START_PLAN_ANTHROPIC_BASE: &str = "https://zcode.z.ai/api/v1/zcode-pla
 const API_KEY_NAME: &str = "zcode-api-key";
 
 fn web_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(15))
-        .build()
+    // 全进程共享单实例：poll 循环每 2-3s 一请求，一次登录上百次全新
+    // TCP+TLS 握手（~100-300ms/次）纯浪费；OnceLock + ureq 自带连接池
+    // 让 keep-alive 真正复用
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| web_agent_with(15))
+        .clone()
+}
+
+/// 按超时档位取共享 Agent：同档位进程内单例（不同超时档各建一个池）。
+fn web_agent_with(timeout_secs: u64) -> ureq::Agent {
+    static AGENTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, ureq::Agent>>> =
+        std::sync::OnceLock::new();
+    let map = AGENTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(timeout_secs)
+        .or_insert_with(|| {
+            ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(10))
+                .timeout(Duration::from_secs(timeout_secs))
+                .build()
+        })
+        .clone()
 }
 
 pub fn extract_access_token(provider: &str, raw: &Value) -> Option<String> {

@@ -927,7 +927,19 @@ fn persist_oauth_account(
         .to_string();
     let raw_access = oauth::extract_access_token(provider, raw).unwrap_or_default();
     let access_token = if provider == "zai" && !raw_access.is_empty() {
-        oauth::resolve_zai_business_token(&raw_access).ok_or_else(|| i18n::tr("err.oauth.zai_business"))?
+        // OAuth 本身已成功（poll Ready / deep link 都到了），业务 token 兑换是最后一步；
+        // 网络抖动一次就整体失败会让用户走完整个登录流程白跑，加短重试挡掉偶发抖动
+        let mut resolved = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            if let Some(t) = oauth::resolve_zai_business_token(&raw_access) {
+                resolved = Some(t);
+                break;
+            }
+        }
+        resolved.ok_or_else(|| i18n::tr("err.oauth.zai_business"))?
     } else {
         raw_access
     };
