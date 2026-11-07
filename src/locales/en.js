@@ -423,6 +423,8 @@ export const en = {
   "xl.hint": "History persists to gateway.jsonl (last ~2000 lines); click a row to expand model, latency and error details.",
   "xl.searchPh": "Search endpoint / account / model…",
   "xl.export": "Export",
+  "xl.aggExpand": "Show all ({n} more)",
+  "xl.aggCollapse": "Collapse",
   "xl.byAccount": "By account",
   "xl.byModel": "By model",
   "xl.poolMore": "…and {n} healthy accounts",

@@ -189,8 +189,26 @@ export default function GatewayLogsPage() {
         g.ttfts.sort((a, b) => a - b);
         return { ...g, rate: g.n ? Math.round((g.ok / g.n) * 100) : null, p50: pct(g.mss, 0.5), p95: pct(g.mss, 0.95), tp50: pct(g.ttfts, 0.5) };
       })
-      .sort((a, b) => b.n - a.n);
+      // 诊断排序：失败率高的组置顶（失败率主排序，请求量次排序）——账号多时
+      // 出问题的组不再被请求量大的健康组淹没；全成功时自然退化为按量排
+      .sort((a, b) => {
+        const fa = a.rate != null ? 100 - a.rate : -1;
+        const fb = b.rate != null ? 100 - b.rate : -1;
+        return (fb - fa) || (b.n - a.n);
+      });
   }, [filtered, groupDim]);
+  // 聚合表收敛/展开：账号多时全量行把明细表顶出视野。默认只显示尾部 6 行
+  // （含失败行，诊断优先），「显示全部 / 收起」切换；换维度或筛选重算时自动收回
+  const [aggExpanded, setAggExpanded] = useState(false);
+  useEffect(() => { setAggExpanded(false); }, [filtered, groupDim]);
+  const AGG_COLLAPSED = 6;
+  const aggVisible = aggExpanded ? groups : groups.slice(0, AGG_COLLAPSED);
+  const aggHidden = groups.length - aggVisible.length;
+  // 行点击下钻：组名写入搜索框（account 维度直接命中账号名；model 维度命中模型名），
+  // 明细表与顶部统计实时联动——从「某组异常」到「该组的具体请求」一步到位
+  const drillGroup = (key) => {
+    setQ(key === "—" ? "" : key);
+  };
   const exportLogs = () => {
     const blob = new Blob([JSON.stringify(filtered, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -288,9 +306,12 @@ export default function GatewayLogsPage() {
                 <span className="x-ls-agg-v">{t("x.tokOut")}</span>
                 <span className="x-ls-agg-v">{t("x.tokCache")}</span>
               </div>
-              {groups.map((g) => (
-                <div key={g.key} className="x-ls-agg-row">
-                  <span className="x-ls-agg-name" title={g.key}>{g.key}</span>
+              {aggVisible.map((g) => {
+                const failed = g.rate != null && g.rate < 100;
+                return (
+                <div key={g.key} className={"x-ls-agg-row" + (failed ? " has-fail" : "")}>
+                  <span className="x-ls-agg-name clickable" title={`${g.key}（点击下钻到该组明细）`}
+                    onClick={() => drillGroup(g.key)}>{g.key}</span>
                   <span className="x-ls-agg-v">{g.n}</span>
                   <span className={"x-ls-agg-v" + (g.rate != null ? (g.rate >= 90 ? " ok" : g.rate < 60 ? " bad" : "") : "")}>{g.rate != null ? `${g.rate}%` : "—"}</span>
                   <span className="x-ls-agg-v">{g.p50 != null ? `${g.p50}ms` : "—"}</span>
@@ -300,7 +321,13 @@ export default function GatewayLogsPage() {
                   <span className="x-ls-agg-v">{fmtTok(g.tout)}↑</span>
                   <span className="x-ls-agg-v">{fmtTok(g.tcache)}⚡</span>
                 </div>
-              ))}
+                );
+              })}
+              {(aggHidden > 0 || groups.length > AGG_COLLAPSED)
+                ? <button className="btn-ghost x-ls-agg-toggle" onClick={() => setAggExpanded(!aggExpanded)}>
+                    {aggExpanded ? t("xl.aggCollapse") : t("xl.aggExpand", { n: aggHidden })}
+                  </button>
+                : null}
             </div>
           : null}
 

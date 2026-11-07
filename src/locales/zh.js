@@ -423,6 +423,8 @@ export const zh = {
   "xl.hint": "历史落盘于 gateway.jsonl（尾部约 2000 行）；点击行展开模型、耗时与错误详情。",
   "xl.searchPh": "搜索端点 / 账号 / 模型…",
   "xl.export": "导出",
+  "xl.aggExpand": "显示全部（还有 {n} 组）",
+  "xl.aggCollapse": "收起",
   "xl.byAccount": "按账号",
   "xl.byModel": "按模型",
   "xl.poolMore": "还有 {n} 个正常账号",

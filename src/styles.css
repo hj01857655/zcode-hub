@@ -2433,6 +2433,18 @@ html[data-theme="light"] {
 .x-ls-agg-v { color: var(--ink-dim); text-align: right; }
 .x-ls-agg-v.ok { color: var(--mint); }
 .x-ls-agg-v.bad { color: var(--red); }
+/* 聚合表：有失败的组整行淡红底（诊断置顶后的视觉锚点） */
+.x-ls-agg-row.has-fail { background: color-mix(in srgb, var(--red) 5%, transparent); }
+/* 组名可点击下钻（写入搜索框触发明细联动） */
+.x-ls-agg-name.clickable { cursor: pointer; }
+.x-ls-agg-name.clickable:hover { color: var(--mint); }
+/* 收敛/展开切换按钮：居中窄条，不占行高 */
+.x-ls-agg-toggle {
+  display: block;
+  margin: 4px auto 2px;
+  padding: 1px 12px;
+  font-size: 11px;
+}
 .x-test-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .x-test-close { padding: 1px 10px; font-size: 15px; line-height: 1.4; }
 .x-test-panel label.x-test-label {
