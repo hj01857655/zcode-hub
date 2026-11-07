@@ -1898,6 +1898,7 @@ input:focus-visible,
 .x-log-item.expanded { grid-template-columns: minmax(0, 1fr); }
 .x-log-item.expanded .x-log-detail { grid-column: 1 / -1; margin: 2px 0 4px; min-width: 0; }
 .x-log-item.expanded .x-log-detail .x-log-pre { max-height: 220px; }
+.x-log-item.expanded .x-log-detail .x-log-pre + .x-log-pre { margin-top: 8px; }
 /* —— 折叠树（请求日志页）：组节点行 + 组内明细缩进区 —— */
 /* 树视图：组节点行与表头共用 10 轨模板（组行 10 个数据列，逐列对齐表头标签） */
 .x-log-row.tree-group,

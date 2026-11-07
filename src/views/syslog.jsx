@@ -24,14 +24,13 @@ function parseTextLine(line) {
 const ERR_EVENTS = ["fail", "error", "timeout", "corrupt", "downgraded"];
 const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
 
-// 行展开文本：resp= 是 detail 最后一段——之前是请求/结果元数据，之后是响应体；
-// 体是 JSON 就缩进格式化（落盘时空白已压平，parse 不受影响），不是就原样
-function expandLine(detail) {
+// 行拆分：resp= 是 detail 最后一段——之前是请求/结果元数据，之后是响应体；
+// 体是 JSON 就缩进格式化（落盘时空白已压平，parse 不受影响），不是就原样。
+// 请求行与响应体分开渲染——请求是行，响应也是行，不拼在一起
+function splitLine(detail) {
   const i = detail.lastIndexOf("resp=");
-  if (i === -1) return detail;
-  const meta = detail.slice(0, i).trimEnd();
-  const body = detail.slice(i + 5).trim();
-  return meta ? `${meta}\n\n${prettyJson(body)}` : prettyJson(body);
+  if (i === -1) return { meta: detail, body: "" };
+  return { meta: detail.slice(0, i).trimEnd(), body: detail.slice(i + 5).trim() };
 }
 
 const FLOWS = ["all", "oauth", "claim", "switch", "gateway", "sys"];
@@ -146,11 +145,12 @@ export default function SysLogPage() {
   );
 }
 
-// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开把这一行打全——
-// 元信息一行 + resp 响应体 JSON 缩进格式化，日志本来的样子，不做视图切换。
-// hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
+// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开分块打全——
+// 请求元信息一行、resp 响应体 JSON 缩进格式化，各自独立成块（请求是行，响应也是行），
+// 不拼接不做视图切换。hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
+  const { meta, body } = splitLine(p.detail || p.raw);
   return (
     <div className={"x-log-item" + (open ? " expanded" : "")}>
       <div className={"x-log-row sl-row clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
@@ -162,7 +162,8 @@ function TextRow({ p }) {
       </div>
       {open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
-            <pre className="x-log-pre">{expandLine(p.detail || p.raw)}</pre>
+            {meta ? <pre className="x-log-pre">{meta}</pre> : null}
+            {body ? <pre className="x-log-pre">{prettyJson(body)}</pre> : null}
           </div>
         : null}
     </div>
