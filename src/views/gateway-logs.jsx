@@ -242,17 +242,16 @@ export default function GatewayLogsPage() {
         return (fb - fa) || (b.n - a.n);
       });
   }, [filtered, groupDim]);
-  // 聚合表收敛/展开：账号多时全量行把明细表顶出视野。默认只显示尾部 6 行
-  // （含失败行，诊断优先），「显示全部 / 收起」切换；换维度或筛选重算时自动收回
-  const [aggExpanded, setAggExpanded] = useState(false);
-  useEffect(() => { setAggExpanded(false); }, [filtered, groupDim]);
-  const AGG_COLLAPSED = 6;
-  const aggVisible = aggExpanded ? groups : groups.slice(0, AGG_COLLAPSED);
-  const aggHidden = groups.length - aggVisible.length;
-  // 行点击下钻：组名写入搜索框（account 维度直接命中账号名；model 维度命中模型名），
-  // 明细表与顶部统计实时联动——从「某组异常」到「该组的具体请求」一步到位
-  const drillGroup = (key) => {
-    setQ(key === "—" ? "" : key);
+  // 折叠树展开态：Set<组键>，组节点点击切换展开/收起；换维度或筛选重算时自动全收
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
+  useEffect(() => { setExpandedGroups(new Set()); }, [filtered, groupDim]);
+  const toggleGroup = (key) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
   const exportLogs = () => {
     const blob = new Blob([JSON.stringify(filtered, null, 2)], { type: "application/json" });
@@ -352,75 +351,61 @@ export default function GatewayLogsPage() {
         </div>
 
         {filtered.length
-          ? <div className="x-ls-agg">
-              <div className="x-ls-agg-row head">
-                <span className="x-ls-agg-name">{groupDim === "account" ? t("x.logColAcct") : t("x.logColModel")}</span>
-                <span className="x-ls-agg-v">{t("xl.total")}</span>
-                <span className="x-ls-agg-v">{t("xl.rate")}</span>
-                <span className="x-ls-agg-v" title={t("xl.latTotal")}>p50</span>
-                <span className="x-ls-agg-v" title={t("xl.latTotal")}>p95</span>
-                <span className="x-ls-agg-v" title="Time To First Token (stream, p50)">TTFT p50</span>
-                <span className="x-ls-agg-v">{t("x.tokIn")}</span>
-                <span className="x-ls-agg-v">{t("x.tokOut")}</span>
-                <span className="x-ls-agg-v">{t("x.tokCache")}</span>
-                <span className="x-ls-agg-v" title={t("xl.errDistTip")}>{t("xl.errDist")}</span>
+          ? <div className="x-log-list tree">
+              <div className="x-log-head">
+                <span></span>
+                <span>{t("x.logColTs")}</span>
+                <span>{groupDim === "account" ? t("x.logColAcct") : t("x.logColModel")}</span>
+                <span>{t("xl.total")}</span>
+                <span>{t("xl.rate")}</span>
+                <span title={t("xl.latTotal")}>p50</span>
+                <span title={t("xl.latTotal")}>p95</span>
+                <span title="Time To First Token (stream, p50)">TTFT p50</span>
+                <span>{t("x.tokIn")}</span>
+                <span>{t("x.tokOut")}</span>
+                <span>{t("x.tokCache")}</span>
+                <span title={t("xl.errDistTip")}>{t("xl.errDist")}</span>
               </div>
-              {aggVisible.map((g) => {
+              {groups.map((g) => {
                 const failed = g.rate != null && g.rate < 100;
+                const expanded = expandedGroups.has(g.key);
                 return (
-                <div key={g.key} className={"x-ls-agg-row" + (failed ? " has-fail" : "")}>
-                  <span className="x-ls-agg-name clickable" title={`${g.key}（点击下钻到该组明细）`}
-                    onClick={() => drillGroup(g.key)}>{g.key}</span>
-                  <span className="x-ls-agg-v">{g.n}</span>
-                  <span className={"x-ls-agg-v" + (g.rate != null ? (g.rate >= 90 ? " ok" : g.rate < 60 ? " bad" : "") : "")}>{g.rate != null ? `${g.rate}%` : "—"}</span>
-                  <span className="x-ls-agg-v">{g.p50 != null ? `${g.p50}ms` : "—"}</span>
-                  <span className="x-ls-agg-v">
-                    {g.p95 != null ? `${g.p95}ms` : "—"}
-                    {g.p95Bar != null
-                      ? <span className="x-ls-agg-bar" aria-hidden="true"><span style={{ width: `${Math.round(g.p95Bar * 100)}%` }} /></span>
-                      : null}
-                  </span>
-                  <span className="x-ls-agg-v">{g.tp50 != null ? `${g.tp50}ms` : "—"}</span>
-                  <span className="x-ls-agg-v">{fmtTok(g.tin)}↓</span>
-                  <span className="x-ls-agg-v">{fmtTok(g.tout)}↑</span>
-                  <span className="x-ls-agg-v">{fmtTok(g.tcache)}⚡</span>
-                  <span className="x-ls-agg-v x-ls-agg-errdist" title={g.errTop || undefined}>{failed ? (g.errTop || "—") : ""}</span>
+                <div key={g.key} className={"x-log-item" + (expanded ? " expanded" : "")}>
+                  {/* 组节点行：点击展开/收起该组明细 */}
+                  <div className={"x-log-row tree-group" + (failed ? " has-fail" : "")}
+                    onClick={() => toggleGroup(g.key)} role="button">
+                    <span className={"x-log-caret" + (expanded ? " open" : "")}>▸</span>
+                    <span className="x-log-ts" title={`${g.key}（点击展开/收起组内 ${g.n} 条明细）`}>
+                      <span className="tree-group-name">{g.key}</span>
+                    </span>
+                    <span className="x-log-acct">{g.n} 条 · {g.errTop || "全成功"}</span>
+                    <span className="x-log-model">{g.rate != null ? `${g.rate}%` : "—"}</span>
+                    <span className={"x-log-stream" + (failed ? " " : " ok")}>&nbsp;</span>
+                    <span className="x-log-code"><span className="x-log-dot" />{g.p50 != null ? `${g.p50}ms` : "—"}</span>
+                    <span className={"x-log-ms" + (g.p95 != null && g.p95 >= 5000 ? " bad" : g.p95 != null && g.p95 >= 1000 ? " warn" : "")}>
+                      {g.p95 != null ? `${g.p95}ms` : "—"}
+                    </span>
+                    <span className="x-log-tok">{g.tp50 != null ? `${g.tp50}ms` : "—"}</span>
+                    <span className="x-log-cache">{fmtTok(g.tin)}↓/{fmtTok(g.tout)}↑</span>
+                    <span className="x-ls-agg-errdist" title={g.errTop || undefined}>{failed ? (g.errTop || "—") : ""}</span>
+                  </div>
+                  {/* 组内明细：懒渲染——仅展开的组渲染 LogRow（体大，收起的组零 DOM） */}
+                  {expanded
+                    ? <div className="tree-rows">
+                        {g.rows.slice().reverse().map((l) => {
+                          const key = `${l.ts}|${l.ep}|${l.account}`;
+                          return <LogRow key={key} l={l} open={openKey === key} onToggle={() => setOpenKey(openKey === key ? null : key)} />;
+                        })}
+                      </div>
+                    : null}
                 </div>
                 );
               })}
-              {(aggHidden > 0 || groups.length > AGG_COLLAPSED)
-                ? <button className="btn-ghost x-ls-agg-toggle" onClick={() => setAggExpanded(!aggExpanded)}>
-                    {aggExpanded ? t("xl.aggCollapse") : t("xl.aggExpand", { n: aggHidden })}
-                  </button>
-                : null}
             </div>
-          : null}
-
-        {err
-          ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div>
-          : filtered.length
-            ? <div className="x-log-list">
-                <div className="x-log-head">
-                  <span></span>
-                  <span>{t("x.logColTs")}</span>
-                  <span>{t("x.logColEp")}</span>
-                  <span>{t("x.logColAcct")}</span>
-                  <span>{t("x.logColModel")}</span>
-                  <span>{t("x.logColStream")}</span>
-                  <span>{t("x.logColCode")}</span>
-                  <span>{t("x.logColMs")}</span>
-                  <span>{t("x.logColTok")}</span>
-                  <span>{t("x.logColCache")}</span>
-                </div>
-                {filtered.slice().reverse().map((l) => {
-                  const key = `${l.ts}|${l.ep}|${l.account}`;
-                  return <LogRow key={key} l={l} open={openKey === key} onToggle={() => setOpenKey(openKey === key ? null : key)} />;
-                })}
-              </div>
-            : <div className="x-log-empty">
-                <Ic name="empty" size={18} />
-                <span>{t("xl.empty")}</span>
-              </div>}
+          : <div className="x-log-empty">
+              <Ic name="empty" size={18} />
+              <span>{t("xl.empty")}</span>
+            </div>}
         <div className="hint">{t("xl.hint")}</div>
       </section>
     </>

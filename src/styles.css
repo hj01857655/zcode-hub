@@ -1887,6 +1887,32 @@ input:focus-visible,
 .x-log-item.expanded { grid-template-columns: minmax(0, 1fr); }
 .x-log-item.expanded .x-log-detail { grid-column: 1 / -1; margin: 2px 0 4px; min-width: 0; }
 .x-log-item.expanded .x-log-detail .x-log-pre { max-height: 220px; }
+/* —— 折叠树（请求日志页）：组节点行 + 组内明细缩进区 —— */
+/* 组节点行：网格列与 x-log-head 对齐（12 列），整行可点击展开/收起 */
+.x-log-row.tree-group {
+  grid-template-columns: 18px 72px minmax(110px, 1.6fr) repeat(9, minmax(48px, 1fr));
+  font-weight: 600;
+  cursor: pointer;
+}
+.x-log-row.tree-group:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.x-log-row.tree-group.has-fail {
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  box-shadow: inset 2px 0 0 var(--red);
+}
+.tree-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 组内明细容器：相对组节点缩进（左缘竖线标识归属），收起时零 DOM */
+.tree-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 4px 18px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--ink) 10%, transparent);
+}
 /* 详情内部：请求/响应左右并排 */
 .x-log-blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .x-log-blocks .x-log-block { margin-top: 0; min-width: 0; }
