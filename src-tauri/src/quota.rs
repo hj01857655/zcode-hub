@@ -407,17 +407,38 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
     tokens
 }
 
+/// flowlog 诊断摘要行：URL 缩短为路径（域名固定不必重复）、HTTP 状态、业务码、
+/// 耗时、响应体截 2K。每次 http_get_json 调用写一行——balance/claim/touch 等
+/// app 内部上游 API 的请求级排障数据源（3012/风控/限流可追溯）。
+fn http_diag_line(url: &str, status: u16, body: &str, elapsed_ms: u128) -> String {
+    let path = url
+        .split_once("?")
+        .map_or(url, |(base, _)| base)
+        .split("://")
+        .last()
+        .unwrap_or(url)
+        .to_string();
+    let code = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
+        .unwrap_or(-1);
+    let clip = |s: &str, cap: usize| {
+        if s.chars().count() <= cap {
+            s.to_string()
+        } else {
+            let head: String = s.chars().take(cap).collect();
+            format!("{head}…[共 {} 字符]", s.chars().count())
+        }
+    };
+    format!("path={path} status={status} code={code} ms={} resp={}", elapsed_ms, clip(body, 2048))
+}
+
 fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
     let retry_delays = [500u64, 1500, 4000];
-    // 共享单例：额度轮询/balance/待生效判定全部经此函数，sweep 周期性调用，
-    // 每次重建 Agent 等于每请求一次全新 TCP+TLS 握手
+    // 统一记录层：quota/balance/touch 读取链经 httplog 共享 Agent，
+    // 中间件自动落 flowlog（URL/方法/状态/耗时/响应体截 2K），系统日志页可查
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    let agent = AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
-            .build()
-    });
+    let agent = AGENT.get_or_init(|| crate::httplog::logged_agent(20));
     let headers = if url.contains("zcode.z.ai") {
         zai_billing_headers_with_mid(token, mid.map(str::to_string))
     } else {
@@ -430,10 +451,13 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
         for (k, v) in &headers {
             req = req.set(k, v);
         }
+        let t0 = std::time::Instant::now();
         let resp = req.call();
         match resp {
             Ok(r) => {
+                let status = r.status();
                 let text = r.into_string().map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+                crate::flowlog::log("sys", "http-ok", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
                 return Ok(if text.is_empty() {
                     Value::Null
                 } else {
@@ -441,7 +465,9 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                 });
             }
             Err(ureq::Error::Status(code, r)) => {
+                let status: u16 = code;
                 let body = r.into_string().unwrap_or_default();
+                crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &body, t0.elapsed().as_millis()));
                 if let Ok(v) = serde_json::from_str::<Value>(&body) {
                     if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
                         return Err(crate::i18n::tr("err.token.biz401"));

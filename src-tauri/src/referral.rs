@@ -4,7 +4,6 @@ use crate::quota;
 use crate::zcrypto;
 use serde_json::Value;
 use std::path::Path;
-use std::time::Duration;
 
 // 绑定端点是奖励中心 web（zcode.z.ai/cn/rewards）的同源代理前缀 /zcode-api/，
 // 与 /api/v1/ 不是同一路由——实测 /api/v1 下无 bind-code
@@ -15,10 +14,9 @@ pub const REFERRAL_BIND_URL: &str = "https://zcode.z.ai/zcode-api/incentive/refe
 const REFERRAL_TIMEOUT_SECS: u64 = 20;
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(REFERRAL_TIMEOUT_SECS))
-        .build()
+    // 统一记录层：referral 链（summary/invitees/bind）经 httplog 共享 Agent，
+    // 中间件自动落 flowlog，系统日志页可查
+    crate::httplog::logged_agent(REFERRAL_TIMEOUT_SECS)
 }
 
 fn get_json(url: &str, token: &str, mid: Option<String>) -> Result<Value, String> {

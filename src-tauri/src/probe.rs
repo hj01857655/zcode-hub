@@ -3,7 +3,6 @@ use crate::i18n::tr;
 use crate::quota::{self, Channel};
 use serde::Serialize;
 use serde_json::Value;
-use std::time::Duration;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -229,10 +228,8 @@ fn classify_via(channels: &[Channel], fetch: &ProbeFetch) -> Option<ProbeOutcome
 }
 
 fn real_fetch(url: &str, token: &str, mid: Option<&str>) -> Result<Value, ProbeErr> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8))
-        .build();
+    // 统一记录层：切换探针（低频、诊断价值高——登录态验证失败可追溯）经 httplog
+    let agent = crate::httplog::logged_agent(8);
     let mut req = agent.get(url);
     if url.contains("zcode.z.ai") {
         for (k, v) in quota::zai_billing_headers_with_mid(token, mid.map(str::to_string)) {

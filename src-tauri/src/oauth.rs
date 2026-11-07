@@ -1,7 +1,6 @@
 
 use crate::quota;
 use serde_json::{json, Value};
-use std::time::Duration;
 
 const TOKEN_URL: &str = "https://zcode.z.ai/api/v1/oauth/token";
 const FLOW_INIT_URL: &str = "https://zcode.z.ai/api/v1/oauth/cli/init";
@@ -461,12 +460,9 @@ pub const START_PLAN_ANTHROPIC_BASE: &str = "https://zcode.z.ai/api/v1/zcode-pla
 const API_KEY_NAME: &str = "zcode-api-key";
 
 fn web_agent() -> ureq::Agent {
-    // 全进程共享单实例：poll 循环每 2-3s 一请求，一次登录上百次全新
-    // TCP+TLS 握手（~100-300ms/次）纯浪费；OnceLock + ureq 自带连接池
-    // 让 keep-alive 真正复用
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| web_agent_with(15))
-        .clone()
+    // 统一记录层：oauth 全链（init/poll/token 兑换/userinfo）经 httplog 共享 Agent，
+    // 中间件自动落 flowlog，系统日志页可查
+    crate::httplog::logged_agent(15)
 }
 
 /// 按超时档位取共享 Agent：同档位进程内单例（不同超时档各建一个池）。
@@ -477,12 +473,7 @@ fn web_agent_with(timeout_secs: u64) -> ureq::Agent {
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
     guard
         .entry(timeout_secs)
-        .or_insert_with(|| {
-            ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(10))
-                .timeout(Duration::from_secs(timeout_secs))
-                .build()
-        })
+        .or_insert_with(|| crate::httplog::logged_agent(timeout_secs))
         .clone()
 }
 

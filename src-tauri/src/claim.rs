@@ -4,7 +4,6 @@ use crate::zcrypto;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
-use std::time::Duration;
 
 pub const BILLING_CLAIM_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/claim";
 pub const CLIENT_CONFIGS_URL: &str = "https://zcode.z.ai/api/v1/client/configs";
@@ -156,15 +155,9 @@ fn decrypt_credential(v: &str, secret: &str) -> Option<String> {
 }
 
 fn agent() -> ureq::Agent {
-    // 共享单例：touch/claim/balance 同域高频请求，复用 keep-alive 连接
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(CLAIM_TIMEOUT_SECS))
-            .build()
-    })
-    .clone()
+    // 统一记录层：全仓 HTTP 调用经 httplog 的共享 Agent，中间件自动落 flowlog
+    // （URL/方法/状态/耗时/响应体截 2K），系统日志页可查
+    crate::httplog::logged_agent(CLAIM_TIMEOUT_SECS)
 }
 
 /// 账号的 user id（来自 oauth user_info 快照）。缺它说明快照不完整（旧版保存的登录），
@@ -446,6 +439,22 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
             }
         }
     }
+    // 诊断摘要行：touch 拉取成功——投放条数、可领 plan_id 清单、响应体截 2K
+    // （可领资格的直接证据；「别人能刷出我刷不出」的两端对比数据源）
+    {
+        let pids: Vec<&str> = out.iter().map(|p| p.plan_id.as_str()).collect();
+        let clip = |s: &str, cap: usize| if s.chars().count() <= cap { s.to_string() } else { format!("{}…[共 {} 字符]", s.chars().take(cap).collect::<String>(), s.chars().count()) };
+        crate::flowlog::log(
+            "claim",
+            "touch-ok",
+            &format!(
+                "deliveries={} plans={} resp={}",
+                dels.len(),
+                pids.join(","),
+                clip(&v.to_string(), 2048)
+            ),
+        );
+    }
     Ok(out)
 }
 
@@ -508,8 +517,17 @@ pub fn submit_claim(
             message: crate::i18n::trf("err.http.read", &[("e", &e.to_string())]),
             next_at: None,
         })?;
-    let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
+    let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp.clone()));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+    // 诊断摘要行：claim 提交的请求体（{plan_id}，无敏感内容全记）与响应体截 2K
+    crate::flowlog::log(
+        "claim",
+        if code == 0 { "claim-http-ok" } else { "claim-http-err" },
+        &format!("POST billing/claim req={{\"plan_id\":\"{plan_id}\"}} code={code} resp={}", {
+            let clip = |s: &str, cap: usize| if s.chars().count() <= cap { s.to_string() } else { format!("{}…[共 {} 字符]", s.chars().take(cap).collect::<String>(), s.chars().count()) };
+            clip(&resp, 2048)
+        }),
+    );
     if code != 0 {
         return Err(claim_error(code, &v));
     }

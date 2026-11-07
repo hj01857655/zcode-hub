@@ -6,6 +6,8 @@ mod flowlog;
 // 全平台编译：glass.rs 内部 cfg 守卫（mac 原生层在 cfg(target_os) 的 mod mac 内，
 // 其余平台 glass_sync 空操作），generate_handler 注册的命令宏需要模块恒在
 mod glass;
+// HTTP 统一记录层：共享 Agent 工厂 + ureq Middleware，全仓上游接口调用自动落 flowlog
+pub mod httplog;
 mod oauth;
 mod probe;
 mod quota;
