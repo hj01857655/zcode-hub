@@ -22,6 +22,10 @@ pub struct ClaimGrant {
     pub name: String,
     pub units: f64,
     pub period: String,
+    /// 权益真实生效时刻（秒级时间戳，响应原值；None = 响应未给）。
+    /// 与活动 starts_at 彻底分开：赠送池常见次日 0 点生效，活动开始时间不能冒充它。
+    /// 0 = 立即生效（服务端占位语义）。
+    pub effective_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -33,6 +37,10 @@ pub struct ClaimPlan {
     pub grants: Vec<String>,
     #[serde(default)]
     pub grant_items: Vec<ClaimGrant>,
+    /// 可领条上的权益生效时刻（毫秒级）：取 entitlements 里最早的 effective_at。
+    /// None = 响应未给；Some(0) = 立即生效。前端按「字段缺失 → 活动文案兜底」降级。
+    #[serde(default)]
+    pub effective_at: Option<i64>,
     /// 投放 campaign 标识：领取成功后上报 touch/action 用（桌面端对齐，11-03 asar 实锤）
     #[serde(default)]
     pub campaign_id: Option<String>,
@@ -54,6 +62,9 @@ pub struct ClaimOutcome {
     pub plan_name: String,
     pub starts_at: Option<i64>,
     pub ends_at: Option<i64>,
+    /// 权益生效时刻（毫秒级，前端展示权威来源；None = 响应未给）。
+    /// effective_at 0 → Some(0) 表示立即生效，前端按此显示「立即生效」而不是隐藏。
+    pub effective_at: Option<i64>,
     pub server_time: Option<i64>,
 }
 
@@ -284,6 +295,7 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
                     plan_id: pid,
                     grants: vec![],
                     grant_items: vec![],
+                    effective_at: None,
                     campaign_id: dl_campaign.clone(),
                 });
             }
@@ -450,6 +462,10 @@ fn parse_plan(p: &Value) -> Option<ClaimPlan> {
                     name: str_field(e, "show_name", "showName").unwrap_or("").to_string(),
                     units: num_field(e, "grant_units", "grantUnits").unwrap_or(0.0),
                     period: str_field(e, "period", "period").unwrap_or("one_time").to_string(),
+                    // effective_at 0 = 立即生效（占位语义），按原值保留给上层判断；
+                    // 响应没给该字段时为 None，前端走「据活动说明」兜底
+                    effective_at: num_field(e, "effective_at", "effectiveAt")
+                        .map(|n| n as i64),
                 })
                 .collect()
         })
@@ -466,6 +482,17 @@ fn parse_plan(p: &Value) -> Option<ClaimPlan> {
             format!("{} · {} Token（{period_cn}）", g.name, fmt_units(g.units))
         })
         .collect();
+    // 可领条生效时刻：entitlements 里最早的 effective_at（秒 → 毫秒）。
+    // 全部缺失 → None；存在 0 值 → Some(0)（立即生效优先于任何未来时刻）
+    let effective_at = {
+        let vals: Vec<i64> = grant_items.iter().filter_map(|g| g.effective_at).collect();
+        if vals.is_empty() {
+            None
+        } else {
+            let min = vals.iter().min().copied().unwrap_or(0);
+            Some(if min == 0 { 0i64 } else { min * 1000 })
+        }
+    };
     Some(ClaimPlan {
         name: p.get("name").and_then(|s| s.as_str()).unwrap_or("").trim().to_string(),
         description: p
@@ -478,6 +505,7 @@ fn parse_plan(p: &Value) -> Option<ClaimPlan> {
         plan_id,
         grants,
         grant_items,
+        effective_at,
         campaign_id: None,
     })
 }

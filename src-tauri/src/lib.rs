@@ -383,12 +383,29 @@ async fn claim_captcha_submit(
                 .pointer("/data/server_time")
                 .and_then(|x| x.as_i64())
                 .map(|s| s * 1000);
+            // 生效时刻权威来源：data.plan.entitlements[].effective_at（秒级，0=立即生效），
+            // 取最早一条。与 starts_at（活动开始）彻底分开——老逻辑拿活动时间冒充生效时间
+            // 会把「次日 0 点生效」显示成「19:00 放量时刻」。字段缺失 → None，前端走兜底文案。
+            let effective_at = v
+                .pointer("/data/plan/entitlements")
+                .and_then(|e| e.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .filter_map(|e| {
+                            e.get("effective_at")
+                                .or_else(|| e.get("effectiveAt"))
+                                .and_then(|x| x.as_i64())
+                        })
+                        .min()
+                })
+                .map(|s| if s == 0 { 0i64 } else { s * 1000 });
             let outcome = claim::ClaimOutcome {
                 account_id: aid,
                 account_name: aname,
                 plan_name: pname,
                 starts_at: ms("starts_at"),
                 ends_at: ms("ends_at"),
+                effective_at,
                 server_time,
             };
             let p = serde_json::to_value(&outcome).unwrap_or(Value::Null);

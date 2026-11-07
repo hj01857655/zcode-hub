@@ -824,8 +824,23 @@ export function wireEvents() {
     } else {
       const bits = [];
       const now = p.serverTime || Date.now();
-      if (p.startsAt && p.startsAt > now) bits.push(t("m.claimStartsAt", { time: new Date(p.startsAt).toLocaleString(localeTag(), { hour12: false }) }));
-      if (p.endsAt) bits.push(t("m.claimEndsAt", { time: new Date(p.endsAt).toLocaleString(localeTag(), { hour12: false }) }));
+      // 生效时间三级取值（对齐上游 v1.7.4 语义）：effective_at 权威 → 缺失时拿 starts_at
+      // 兜底但标注来源 → 时间统一 YYYY-MM-DD HH:mm（不带秒，带年份）。
+      // effectiveAt 0 = 立即生效；startsAt 在 now 之前属于已生效，不再显示
+      const fmt = (ts) => {
+        const d = new Date(ts);
+        const p2 = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+      };
+      if (p.effectiveAt === 0) {
+        bits.push(t("m.claimEffectiveNow"));
+      } else if (p.effectiveAt) {
+        bits.push(t("m.claimEffectiveAt", { time: fmt(p.effectiveAt) }));
+      } else if (p.startsAt && p.startsAt > now) {
+        // 权威字段缺失：活动开始时间只能当预估，文案标注「据活动说明」，不冒充生效时间
+        bits.push(t("m.claimStartsAt", { time: fmt(p.startsAt) }));
+      }
+      if (p.endsAt) bits.push(t("m.claimEndsAt", { time: fmt(p.endsAt) }));
       toast(t("m.claimOk", { name: p.accountName, plan: p.planName }), "ok", bits.join(t("common.listSep")));
     }
     if (p.accountId) {
