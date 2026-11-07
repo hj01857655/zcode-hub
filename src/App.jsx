@@ -71,11 +71,11 @@ function SideNav({ view, setView, s, unsaved }) {
     ["dashboard", "gauge", "d.menu"],
     ["accounts", "list", "m.accounts"],
     ["gateway", "swap", "x.menuLabel"],
-    ["gatewayLogs", "list", "xl.menuLabel"],
-    ["syslog", "gauge", "sl.menuLabel"],
+    ["gatewayLogs", "clock", "xl.menuLabel"],
+    ["syslog", "doc", "sl.menuLabel"],
     ["referral", "link", "r.menu"],
     ["settings", "sliders", "common.settings"],
-    ["about", "empty", "a.menuLabel"],
+    ["about", "info", "a.menuLabel"],
   ];
   const foldTip = t(folded ? "m.sideExpand" : "m.sideFold");
   return (
@@ -374,7 +374,7 @@ export default function App() {
   if (store.bootError) {
     return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: store.bootError })}</div>;
   }
-  if (!s.state) return <div className="loading">LOADING</div>;
+  if (!s.state) return <div className="loading">{t("common.loading")}</div>;
 
   const st = s.state;
   const active = st.accounts.find((a) => a.is_active) || null;
