@@ -126,15 +126,30 @@ async function loadClaimPreview(id) {
     const plans = await invoke("claim_refresh_one", { id });
     store.claimable[id] = { plans: plans || [], err: null, busy: false };
     // touch 空 ≠ 无事发生：补一次待生效判定（balance 里 active 且桶未下发的套餐）。
-    // 仅在 touch 空时打这第二次请求，省一次上游往返；失败静默为无待生效态
+    // 仅在 touch 空时打这第二次请求，省一次上游往返；失败静默为无待生效态。
+    // per-account 10 分钟节流：没投放的号每轮都打 balance 就是双倍上游请求，
+    // 正是 429/3012 要防的场景；领取成功（pending 解冻）或手动单号刷新不受限
     if (!plans?.length) {
-      store.claimable[id].pending = await invoke("claim_pending_check", { id }).catch(() => null);
+      store.claimable[id].pending = await pendingCheckThrottled(id);
     } else {
       store.claimable[id].pending = null;
     }
   } catch (e) {
     store.claimable[id] = { plans: cur.plans || [], err: String(e), busy: false };
   }
+}
+
+// ---- 待生效判定节流 ----
+// touch 空时的 balance 反推是纯推断态，10 分钟内复用上次结果即可；领取成功后
+// 服务端状态变了，立即解冻让下次刷新拿到真实判定
+const PENDING_CHECK_COOLDOWN_MS = 10 * 60 * 1000;
+const pendingCheckAt = {};
+async function pendingCheckThrottled(id, force = false) {
+  if (!force && Date.now() - (pendingCheckAt[id] || 0) < PENDING_CHECK_COOLDOWN_MS) {
+    return store.claimable[id]?.pending ?? null; // 冷却期内复用上次判定
+  }
+  pendingCheckAt[id] = Date.now();
+  return await invoke("claim_pending_check", { id }).catch(() => null);
 }
 
 // ---- referral 邀请 ----
@@ -196,7 +211,7 @@ async function awaitClaimableFresh(id) {
   store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
   try {
     const plans = await invoke("claim_refresh_one", { id });
-    store.claimable[id] = { plans: plans || [], err: null, busy: false, pending: plans?.length ? null : (await invoke("claim_pending_check", { id }).catch(() => null)) || null };
+    store.claimable[id] = { plans: plans || [], err: null, busy: false, pending: plans?.length ? null : (await pendingCheckThrottled(id)) || null };
   } catch (e) {
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
   }
@@ -302,7 +317,7 @@ async function autoClaimTick() {
       store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
       try {
         const plans = (await invoke("claim_refresh_one", { id })) || [];
-        store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await invoke("claim_pending_check", { id }).catch(() => null)) || null };
+        store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await pendingCheckThrottled(id)) || null };
       } catch (e) {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
@@ -646,7 +661,8 @@ export const actions = {
         store.claimable[id].pending = null;
         toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
       } else {
-        const pending = await invoke("claim_pending_check", { id }).catch(() => null);
+        // 手动单号刷新 = 用户主动要最新状态，强制绕过节流
+        const pending = await pendingCheckThrottled(id, true);
         store.claimable[id].pending = pending || null;
         if (pending) {
           toast(t("m.claimPendingToast", { name, plan: pending.planName }), "ok");
@@ -735,8 +751,9 @@ export const actions = {
             store.claimable[id].pending = null;
             okCount++;
           } else {
-            // 批量也补待生效判定：领取后 touch 不再下发，balance 反推「已领取（待生效）」
-            store.claimable[id].pending = await invoke("claim_pending_check", { id }).catch(() => null) || null;
+            // 批量也补待生效判定：领取后 touch 不再下发，balance 反推「已领取（待生效）」。
+            // 批量走节流——没投放的号每轮都打 balance 就是双倍上游请求
+            store.claimable[id].pending = await pendingCheckThrottled(id) || null;
           }
         } catch (e) {
           store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
@@ -864,6 +881,8 @@ export function wireEvents() {
       toast(t("m.claimOk", { name: p.accountName, plan: p.planName }), "ok", bits.join(t("common.listSep")));
     }
     if (p.accountId) {
+      // 领取结果落地后服务端状态已变（待生效/桶下发），解冻节流让下次刷新拿到真实判定
+      if (p.ok !== false) delete pendingCheckAt[p.accountId];
       loadAcctQuota(p.accountId);
       if (!autoClaimRunning) {
         loadClaimPreview(p.accountId).then(() => emit());

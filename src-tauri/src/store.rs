@@ -376,14 +376,17 @@ pub fn kill_zcode() -> Result<bool, String> {
     if in_sandbox() {
         return Ok(true);
     }
-    if !zcode_running() {
+    // 一次 tasklist 拿 PID 列表三处复用：存在性判定 + 托盘枚举 + 退出轮询，
+    // 原实现 zcode_running() 与 remove_zcode_tray_icons 内部各跑一次 tasklist
+    let pids = zcode_pids();
+    if pids.is_empty() {
         return Ok(true);
     }
     // ZCode（Electron）「关闭 = 最小化到托盘」，不响应 WM_CLOSE，只能 taskkill /F 强杀。
     // 强杀走 TerminateProcess，进程来不及调 Shell_NotifyIcon(NIM_DELETE)，通知区留下
     // 「幽灵图标」（悬停才消失，每次切换 +1）。因此强杀前先枚举 ZCode 进程名下的窗口，
     // 按 (hwnd, uID) 探测已注册的托盘图标，替它调 NIM_DELETE 摘掉。
-    let removed = remove_zcode_tray_icons();
+    let removed = remove_zcode_tray_icons(&pids);
     if removed == 0 {
         eprintln!("[zsw] 未找到 ZCode 托盘图标（可能本来就无图标或窗口类变更），本次强杀可能残留幽灵图标");
     }
@@ -392,12 +395,12 @@ pub fn kill_zcode() -> Result<bool, String> {
         .output();
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
-        if !zcode_running() {
+        if zcode_pids().is_empty() {
             return Ok(true);
         }
         std::thread::sleep(Duration::from_millis(400));
     }
-    Ok(!zcode_running())
+    Ok(zcode_pids().is_empty())
 }
 
 /// Windows 托盘图标归属枚举的上下文。
@@ -455,15 +458,15 @@ unsafe fn remove_tray_icons_of(hwnd: isize) -> usize {
 }
 
 /// 强杀前先替 ZCode 摘掉它自己的托盘图标，返回摘掉的数量。
+/// PID 列表由调用方传入（kill_zcode 已取过一次，不再重复跑 tasklist）。
 #[cfg(windows)]
-fn remove_zcode_tray_icons() -> usize {
+fn remove_zcode_tray_icons(pids: &[u32]) -> usize {
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
 
-    let pids = zcode_pids();
     if pids.is_empty() {
         return 0;
     }
-    let mut ctx = TrayCleanup { pids, removed: 0 };
+    let mut ctx = TrayCleanup { pids: pids.to_vec(), removed: 0 };
     unsafe {
         EnumWindows(Some(tray_cleanup_proc), &mut ctx as *mut TrayCleanup as isize);
     }

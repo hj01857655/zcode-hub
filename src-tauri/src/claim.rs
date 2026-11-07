@@ -264,16 +264,30 @@ pub fn claimed_pending(
         if pending_ents.is_empty() {
             continue; // 权益全部已进桶 → 已生效，不算待生效
         }
-        // 最早生效时刻（秒级；0 = 立即生效）。无字段时用套餐 starts_at 兜底
-        let effective_at = pending_ents
+        // 生效时刻取值分两级：
+        // - 权威：entitlements[].effective_at（秒级；0 = 立即生效）。已过而桶仍缺 =
+        //   服务端数据未落，跳过该套餐（桶随时会出现，展示待生效反而是错）。
+        // - 预估：权威字段缺失时回落套餐 starts_at——它是活动开始时间不是生效时间，
+        //   只作展示参考；且不参与「已过即跳过」判定（starts_at 必然已过，会把这个
+        //   窗口里的待生效态整个跳没了）。前端对无 effectiveAt 的条目显示预估文案。
+        let authoritative_eff = pending_ents
             .iter()
             .filter_map(|e| {
                 e.get("effective_at")
                     .or_else(|| e.get("effectiveAt"))
                     .and_then(|x| x.as_i64())
             })
-            .min()
-            .or_else(|| pl.get("starts_at").and_then(|x| x.as_i64()));
+            .min();
+        if let Some(eff) = authoritative_eff {
+            if eff != 0 && now > 0 && eff <= now {
+                continue;
+            }
+        }
+        let display_eff = Some(
+            authoritative_eff
+                .unwrap_or_else(|| pl.get("starts_at").and_then(|x| x.as_i64()).unwrap_or(0)),
+        )
+        .filter(|s| *s != 0 || authoritative_eff == Some(0));
         let ends_at = pl.get("ends_at").and_then(|x| x.as_i64());
         let name = pl
             .get("name")
@@ -287,18 +301,13 @@ pub fn claimed_pending(
                     .unwrap_or("unknown")
                     .to_string()
             });
-        // 生效时刻已过（含 0=立即生效）而桶仍缺：服务端数据未落，不展示待生效态
-        if let Some(eff) = effective_at {
-            if eff != 0 && now > 0 && eff <= now {
-                continue;
-            }
-        }
         return Some(ClaimedPending {
             account_id: account_id.to_string(),
             plan_name: name,
-            effective_at: effective_at.map(|s| if s == 0 { 0 } else { s * 1000 }),
+            effective_at: display_eff.map(|s| if s == 0 { 0 } else { s * 1000 }),
             ends_at: ends_at.map(|s| s * 1000),
-            source: "balance".into(),
+            // 权威字段缺失 → 预估（前端文案标注「据活动说明」）
+            source: if authoritative_eff.is_some() { "balance" } else { "balance-estimate" }.into(),
         });
     }
     None
