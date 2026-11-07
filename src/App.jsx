@@ -59,59 +59,45 @@ function SideNav({ view, setView, s, unsaved }) {
     : s.live_logged_in
       ? unsaved ? t("m.status.unsaved") : t("m.status.safe")
       : t("m.status.loggedOut");
+  // 折叠态记忆：localStorage（WebView2 持久存储）与 zsw.view 同一套前缀，重启恢复
+  const [folded, setFolded] = useState(() => localStorage.getItem("zsw.sideFold") === "1");
+  const toggleFold = () => setFolded((f) => {
+    const next = !f;
+    try { localStorage.setItem("zsw.sideFold", next ? "1" : "0"); } catch { /* 存储被禁时只是不记忆 */ }
+    return next;
+  });
+  // 导航项清单：视图 / 图标 / 文案键；折叠态只剩图标，全名进悬停提示
+  const NAV = [
+    ["dashboard", "gauge", "d.menu"],
+    ["accounts", "list", "m.accounts"],
+    ["gateway", "swap", "x.menuLabel"],
+    ["gatewayLogs", "list", "xl.menuLabel"],
+    ["syslog", "gauge", "sl.menuLabel"],
+    ["referral", "link", "r.menu"],
+    ["settings", "sliders", "common.settings"],
+    ["about", "empty", "a.menuLabel"],
+  ];
+  const foldTip = t(folded ? "m.sideExpand" : "m.sideFold");
   return (
-    <GlassPane id="sidebar" source="desktop" className="sidenav">
+    <GlassPane id="sidebar" source="desktop" className={"sidenav" + (folded ? " folded" : "")}>
       <div className="side-logo">
-        Z·HUB{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
+        <span className="side-brand">
+          Z·HUB{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
+        </span>
+        <button className="side-fold" title={foldTip} aria-label={foldTip} onClick={toggleFold}>
+          <Ic name="panel" size={15} />
+        </button>
       </div>
-      <button
-        className={"side-item" + (view === "dashboard" ? " on" : "")}
-        onClick={() => setView("dashboard")}
-      >
-        <Ic name="gauge" size={16} /> {t("d.menu")}
-      </button>
-      <button
-        className={"side-item" + (view === "accounts" ? " on" : "")}
-        onClick={() => setView("accounts")}
-      >
-        <Ic name="list" size={16} /> {t("m.accounts")}
-      </button>
-      <button
-        className={"side-item" + (view === "gateway" ? " on" : "")}
-        onClick={() => setView("gateway")}
-      >
-        <Ic name="swap" size={16} /> {t("x.menuLabel")}
-      </button>
-      <button
-        className={"side-item" + (view === "gatewayLogs" ? " on" : "")}
-        onClick={() => setView("gatewayLogs")}
-      >
-        <Ic name="list" size={16} /> {t("xl.menuLabel")}
-      </button>
-      <button
-        className={"side-item" + (view === "syslog" ? " on" : "")}
-        onClick={() => setView("syslog")}
-      >
-        <Ic name="gauge" size={16} /> {t("sl.menuLabel")}
-      </button>
-      <button
-        className={"side-item" + (view === "referral" ? " on" : "")}
-        onClick={() => setView("referral")}
-      >
-        <Ic name="link" size={16} /> {t("r.menu")}
-      </button>
-      <button
-        className={"side-item" + (view === "settings" ? " on" : "")}
-        onClick={() => setView("settings")}
-      >
-        <Ic name="sliders" size={16} /> {t("common.settings")}
-      </button>
-      <button
-        className={"side-item" + (view === "about" ? " on" : "")}
-        onClick={() => setView("about")}
-      >
-        <Ic name="empty" size={16} /> {t("a.menuLabel")}
-      </button>
+      {NAV.map(([v, icon, key]) => (
+        <button
+          key={v}
+          className={"side-item" + (view === v ? " on" : "")}
+          onClick={() => setView(v)}
+          title={folded ? t(key) : undefined}
+        >
+          <Ic name={icon} size={16} /> <span className="side-label">{t(key)}</span>
+        </button>
+      ))}
       <div className="side-spacer" />
       <div className="side-foot">
         <span className={"status-dot " + dotCls} title={statusTip} />

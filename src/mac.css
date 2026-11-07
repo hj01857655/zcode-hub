@@ -38,6 +38,7 @@ html.mac a,
 html.mac .row-actions,
 html.mac .acc-item,
 html.mac .side-item,
+html.mac .sidenav .side-fold,
 html.mac .side-qbtn {
   -webkit-app-region: no-drag;
 }

@@ -170,6 +170,8 @@ export const zh = {
   "d.none": "无",
   "m.quickTheme": "切换主题",
   "m.quickLang": "切换语言（中/EN）",
+  "m.sideFold": "收起侧栏",
+  "m.sideExpand": "展开侧栏",
 
   "btn.saveLogin": "保存登录",
   "btn.captureTitle": "把当前 ZCode 登录存入账号库（防丢号）",

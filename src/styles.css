@@ -113,6 +113,31 @@ html, body {
 }
 .side-foot .status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 侧栏折叠（.folded）：56px 图标轨，文字隐藏、悬停提示兜底；宽度过渡期间
+   overflow 裁掉溢出文案，mac 玻璃由 ResizeObserver 随新几何自动同步 */
+.sidenav { transition: width .18s ease; overflow: hidden; }
+.side-brand { display: flex; align-items: baseline; min-width: 0; flex: 1; }
+.side-fold {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--ink-mute);
+}
+.side-fold:hover { background: var(--panel-2); color: var(--ink); }
+.sidenav.folded { width: 56px; padding-left: 8px; padding-right: 8px; }
+.sidenav.folded .side-logo { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidenav.folded .side-brand { display: none; }
+.sidenav.folded .side-fold .ic { transform: scaleX(-1); }
+.sidenav.folded .side-item { justify-content: center; gap: 0; padding-left: 0; padding-right: 0; }
+.sidenav.folded .side-label { display: none; }
+.sidenav.folded .side-foot { flex-direction: column; align-items: center; gap: 8px; padding-left: 0; padding-right: 0; }
+.sidenav.folded .side-quick { flex-direction: column; margin-left: 0; }
+
 .content {
   flex: 1;
   min-width: 0;

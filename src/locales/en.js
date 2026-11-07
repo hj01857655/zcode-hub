@@ -170,6 +170,8 @@ export const en = {
   "d.none": "None",
   "m.quickTheme": "Toggle theme",
   "m.quickLang": "Toggle language (中/EN)",
+  "m.sideFold": "Collapse sidebar",
+  "m.sideExpand": "Expand sidebar",
 
   "btn.saveLogin": "Save login",
   "btn.captureTitle": "Save the current ZCode login into the account store (loss protection)",

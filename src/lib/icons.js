@@ -59,6 +59,9 @@ const ICONS = {
   copy: `<rect x="5.5" y="5.5" width="8" height="8"/>` + P("M3.5 10.5h-1v-8h8v1"),
   eye: P("M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8 12.1 12.2 8 12.2 1.5 8 1.5 8z") + `<circle cx="8" cy="8" r="1.8"/>`,
   eyeOff: P("M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8 12.1 12.2 8 12.2 1.5 8 1.5 8z") + `<circle cx="8" cy="8" r="1.8"/>` + P("M2.5 2.5l11 11"),
+
+  // 侧栏折叠开关：面板+左栏分隔线；折叠态 CSS scaleX(-1) 镜像成「展开」指向
+  panel: `<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/>` + P("M6 2.5v11"),
 };
 
 export function ic(name, size = 16, cls = "") {
