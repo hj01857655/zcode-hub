@@ -1990,7 +1990,7 @@ input:focus-visible,
 .gw-cfg-mask {
   position: fixed; inset: 0; z-index: 90;
   display: flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--bg, #111) 55%, transparent);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
   backdrop-filter: blur(2px);
 }
 .gw-cfg {
@@ -2178,7 +2178,7 @@ input:focus-visible,
   color: var(--ink);
   outline: none;
 }
-.acc-search:focus { border-color: var(--amber-deep, #b8860b); }
+.acc-search:focus { border-color: var(--amber-deep); }
 .acc-search::placeholder { color: var(--ink-mute); }
 /* 状态筛选 chips：搜索框下一行，与文本搜索叠加；on 态 mint 强调 */
 .acc-filters {

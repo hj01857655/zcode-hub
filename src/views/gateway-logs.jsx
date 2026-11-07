@@ -202,12 +202,14 @@ export default function GatewayLogsPage() {
     for (const l of filtered) {
       const k = l[groupDim] ?? "—";
       let g = map.get(k);
-      if (!g) { g = { key: k, n: 0, ok: 0, mss: [], ttfts: [], tin: 0, tout: 0, tcache: 0, errs: {} }; map.set(k, g); }
+      if (!g) { g = { key: k, n: 0, ok: 0, mss: [], ttfts: [], tin: 0, tout: 0, tcache: 0, errs: {}, rows: [] }; map.set(k, g); }
       g.n += 1;
       if (l.ok) g.ok += 1;
       if (typeof l.ms === "number") g.mss.push(l.ms);
       if (l.stream && typeof l.ttft === "number") g.ttfts.push(l.ttft);
       g.tin += l.tin || 0; g.tout += l.tout || 0; g.tcache += (l.tcr || 0) + (l.tcw || 0);
+      // 折叠树：组内明细行数组（时间倒序，与原明细表渲染顺序一致）
+      g.rows.push(l);
       // 错误分布聚合：失败行按「HTTP 状态码 → body 业务码」二级取键。
       // l.err 是上游 body 截 200 字符（JSON 时含 "code":3012 之类），正则提取业务码；
       // 提不出就只记状态码——429×N / 3012×N / 504×N 的分布一眼可见
