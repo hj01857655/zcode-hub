@@ -409,10 +409,15 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
 
 fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
     let retry_delays = [500u64, 1500, 4000];
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20))
-        .build();
+    // 共享单例：额度轮询/balance/待生效判定全部经此函数，sweep 周期性调用，
+    // 每次重建 Agent 等于每请求一次全新 TCP+TLS 握手
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    let agent = AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .build()
+    });
     let headers = if url.contains("zcode.z.ai") {
         zai_billing_headers_with_mid(token, mid.map(str::to_string))
     } else {
