@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # 手动触发：darwin 腿编译验证玻璃层等 mac-only 改动时不必打 tag 出正式 release
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Mark release as prerelease'
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -76,9 +83,11 @@ jobs:
           # 应用内更新签名私钥（minisign，无口令）；缺失时 updater 产物 latest.json 无法生成
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          tagName: ${{ github.ref_name }}
+          # 手动触发（workflow_dispatch）时以 main 最新 commit 打预发布 tag；
+          # 正常 tag push 时 ref_name 就是 v* 本身
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('v1.9.4-mac-test-{0}', github.sha) || github.ref_name }}
           # Windows 只出 NSIS，latest.json 里指向 *-setup.exe 而非默认的 msi
-          releaseName: 'Z·SWITCH ${{ github.ref_name }}'
+          releaseName: 'Z·SWITCH ${{ github.event_name == ''workflow_dispatch'' && format(''v1.9.4-mac-test-{0}'', github.sha) || github.ref_name }}'
           releaseBody: |
             见 [README](https://github.com/${{ github.repository }}/blob/main/README.md) 了解完整功能。
 
@@ -96,7 +105,8 @@ jobs:
 
             SHA-256 校验和见各 `checksums-*.txt`。
           releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # 手动触发固定 prerelease（mac-test 不进 latest.json 主推），tag push 沿用含 '-' 即预发布的判定
+          prerelease: ${{ github.event_name == 'workflow_dispatch' || contains(github.ref_name, '-') }}
           updaterJsonPreferNsis: true
           args: --bundles ${{ matrix.bundles }} ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
 
@@ -107,14 +117,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUST_TARGET: ${{ matrix.rust_target }}
           ARCH: ${{ matrix.arch }}
+          # 手动触发时上传目标与产物名跟随 tauri-action 生成的测试 tag（见 tagName）
+          REF_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v1.9.4-mac-test-{0}', github.sha) || github.ref_name }}
         run: |
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${REF_TAG#v}"
           # 指定 --target 时产物在 target/<triple>/release，native 时在 target/release
           if [ -n "$RUST_TARGET" ]; then BUILD_DIR="src-tauri/target/$RUST_TARGET/release"; else BUILD_DIR="src-tauri/target/release"; fi
           cp "$BUILD_DIR/zcode-hub.exe" "zcode-hub_${VER}_${ARCH}_portable.exe"
           SETUP=$(ls "$BUILD_DIR"/bundle/nsis/*-setup.exe | head -1)
-          sha256sum "zcode-hub_${VER}_${ARCH}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt"
-          gh release upload "$GITHUB_REF_NAME" "zcode-hub_${VER}_${ARCH}_portable.exe" "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
+          sha256sum "zcode-hub_${VER}_${ARCH}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${ARCH}-${REF_TAG}.txt"
+          gh release upload "$REF_TAG" "zcode-hub_${VER}_${ARCH}_portable.exe" "checksums-Windows-${ARCH}-${REF_TAG}.txt" --clobber
 
       - name: Upload checksums
         if: runner.os != 'Windows'
@@ -122,8 +134,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARCH: ${{ matrix.arch }}
+          REF_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v1.9.4-mac-test-{0}', github.sha) || github.ref_name }}
         run: |
           # 用 arch 标签命名：mac 两腿（aarch64/x64）与 linux 两腿（amd64/arm64）互不撞名
           find src-tauri/target -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
-            | xargs sha256sum | sed 's| .*/| |' > "checksums-${RUNNER_OS}-${ARCH}-${GITHUB_REF_NAME}.txt"
-          gh release upload "$GITHUB_REF_NAME" "checksums-${RUNNER_OS}-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
+            | xargs sha256sum | sed 's| .*/| |' > "checksums-${RUNNER_OS}-${ARCH}-${REF_TAG}.txt"
+          gh release upload "$REF_TAG" "checksums-${RUNNER_OS}-${ARCH}-${REF_TAG}.txt" --clobber
