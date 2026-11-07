@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::sync::Mutex;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -131,6 +132,8 @@ impl Paths {
     }
     pub fn accounts_dir(&self) -> PathBuf { self.store_dir().join("accounts") }
     pub fn settings_file(&self) -> PathBuf { self.store_dir().join("settings.json") }
+    /// 领取历史文件（全库单文件，按 userId 分组）：重登换 accountId 也能按 JWT sub 匹配
+    pub fn claim_history_file(&self) -> PathBuf { self.store_dir().join("claim-history.json") }
     pub fn zcode_dir(&self) -> PathBuf { self.data_root.join(".zcode") }
     pub fn live_file(&self) -> PathBuf { self.zcode_dir().join("v2").join("credentials.json") }
     pub fn live_config(&self) -> PathBuf { self.zcode_dir().join("v2").join("config.json") }
@@ -1731,6 +1734,93 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
         auth_proxy_url: settings.auth_proxy_url.clone(),
         language: crate::i18n::current().as_str().to_string(),
     })
+}
+
+// ---- 领取历史（claim-history.json，按 userId 分组） ----
+// 键用 userId（JWT sub，oauth_user_id 解出）而非 accountId：重登换了 accountId
+// 也能命中同一个人的领取记录——上游 v1.7.4 同款语义，退出重登不丢已领取记录。
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaimHistoryEntry {
+    /// 套餐模板 ID（claim 时的 plan_id）
+    pub plan_id: String,
+    /// 套餐显示名（pending.plan_name）
+    pub plan_name: String,
+    /// 领取时刻（毫秒级本地时间）
+    pub claimed_at: i64,
+    /// 权益生效时刻（毫秒级；0 = 立即生效；None = 响应未给）
+    #[serde(default)]
+    pub effective_at: Option<i64>,
+    /// 套餐有效期止（毫秒级）
+    #[serde(default)]
+    pub ends_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaimHistoryUser {
+    /// 该 userId 最新一次领取时的账号名（仅展示用）
+    #[serde(default)]
+    pub last_account_name: String,
+    pub entries: Vec<ClaimHistoryEntry>,
+}
+
+/// 读全量领取历史（文件不存在返回空 Map）。
+/// 内部锁：防并发领取写文件时交错（claim 走 spawn_blocking，可能并发）。
+static CLAIM_HISTORY_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn claim_history_load(paths: &Paths) -> std::collections::HashMap<String, ClaimHistoryUser> {
+    let _guard = match CLAIM_HISTORY_LOCK.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let raw = match fs::read_to_string(paths.claim_history_file()) {
+        Ok(s) => s,
+        Err(_) => return Default::default(),
+    };
+    serde_json::from_str(&raw).unwrap_or_else(|e| {
+        flowlog::log("claim", "history-corrupt-fallback", &e.to_string());
+        Default::default()
+    })
+}
+
+/// 追加一条领取记录：userId → entries 尾插，同 plan_id 去重（重复领取服务端本会拒，
+/// 这里防御性保留首条）。
+pub fn claim_history_append(
+    paths: &Paths,
+    user_id: &str,
+    entry: ClaimHistoryEntry,
+    account_name: &str,
+) -> Result<(), String> {
+    let _guard = match CLAIM_HISTORY_LOCK.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let mut history = match fs::read_to_string(paths.claim_history_file()) {
+        Ok(s) => serde_json::from_str::<std::collections::HashMap<String, ClaimHistoryUser>>(&s)
+            .unwrap_or_else(|e| {
+                flowlog::log("claim", "history-corrupt-reset", &e.to_string());
+                Default::default()
+            }),
+        Err(_) => Default::default(),
+    };
+    let user = history.entry(user_id.to_string()).or_insert_with(|| ClaimHistoryUser {
+        last_account_name: account_name.to_string(),
+        entries: vec![],
+    });
+    user.last_account_name = account_name.to_string();
+    if !user.entries.iter().any(|e| e.plan_id == entry.plan_id) {
+        user.entries.push(entry);
+    }
+    let body = serde_json::to_string_pretty(&history).unwrap_or_default() + "\n";
+    atomic_write(&paths.claim_history_file(), &body)
+}
+
+/// 按 userId 查某人的全部领取记录（前端展示「已领取过 X · 生效 …」用）。
+pub fn claim_history_for(paths: &Paths, user_id: &str) -> Vec<ClaimHistoryEntry> {
+    claim_history_load(paths)
+        .get(user_id)
+        .map(|u| u.entries.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

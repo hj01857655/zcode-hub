@@ -131,11 +131,34 @@ function PendingStrip({ pending }) {
   );
 }
 
-export function AccountQuotaSlot({ id, quota, plan, pending, claimDisabled, onClaim }) {
+// 领取历史条：本地 claim-history.json 的已领取记录（userId 键，重登不丢）。
+// 只读展示「已领取过 X · 领于 …」；仅无可领条且无待生效态时渲染——有可领条说明
+// 服务端认为还能领，历史让位给可操作状态。
+function HistoryStrip({ history }) {
+  const fmt = (ts) => {
+    const d = new Date(ts);
+    const p2 = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  };
+  const latest = history[history.length - 1];
+  if (!latest) return null;
+  const when = fmt(latest.claimedAt);
+  return (
+    <div className="claim-strip history" title={t("m.claimHistoryTitle")}>
+      <Ic name="check" size={15} />
+      <span className="claim-name">{latest.planName}</span>
+      <span className="claim-grants">{t("m.claimHistoryLine", { time: when })}</span>
+    </div>
+  );
+}
+
+export function AccountQuotaSlot({ id, quota, plan, pending, history, claimDisabled, onClaim }) {
   const strip = plan ? (
     <ClaimStrip id={id} plan={plan} disabled={claimDisabled} onClaim={onClaim} />
   ) : pending ? (
     <PendingStrip pending={pending} />
+  ) : history?.length ? (
+    <HistoryStrip history={history} />
   ) : null;
 
   let inner = null;

@@ -25,6 +25,7 @@ export const store = {
   busyGuard: false,     // guard 互斥锁的可见镜像（切换等重操作跑着时界面可读）
   acctQuota: {},        // id -> {data?, err?, busy}
   claimable: {},        // id -> {plans?, err?, busy}
+  claimHistory: {},     // id -> {history?, err?}（claim-history.json，userId 键）
   referral: {},         // id -> {summary?, invitees?, err?, busy}
 };
 
@@ -125,6 +126,20 @@ export async function loadAcctQuota(id) {
   emit();
 }
 
+// ---- 领取历史（claim-history.json，按 userId 分组） ----
+// 键在后端用 userId（JWT sub）：重登换 accountId 也能命中同一个人的记录。
+// id -> { history: [{planId, planName, claimedAt, effectiveAt, endsAt}] | null, err? }
+
+async function loadClaimHistory(id) {
+  try {
+    const history = await invoke("claim_history", { id });
+    store.claimHistory[id] = { history: history || [], err: null };
+  } catch (e) {
+    store.claimHistory[id] = { history: null, err: stripErr(e) };
+  }
+  emit();
+}
+
 async function loadClaimPreview(id) {
   const cur = store.claimable[id] || {};
   if (cur.busy) return;
@@ -138,6 +153,8 @@ async function loadClaimPreview(id) {
     // 正是 429/3012 要防的场景；领取成功（pending 解冻）或手动单号刷新不受限
     if (!plans?.length) {
       store.claimable[id].pending = await pendingCheckThrottled(id);
+      // touch 空时顺手拉领取历史（本地文件读取，零上游流量），账号行「已领取过」展示用
+      loadClaimHistory(id);
     } else {
       store.claimable[id].pending = null;
     }
@@ -219,6 +236,8 @@ async function awaitClaimableFresh(id) {
   try {
     const plans = await invoke("claim_refresh_one", { id });
     store.claimable[id] = { plans: plans || [], err: null, busy: false, pending: plans?.length ? null : (await pendingCheckThrottled(id)) || null };
+    // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
+    if (!plans?.length) loadClaimHistory(id);
   } catch (e) {
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
   }
@@ -325,6 +344,8 @@ async function autoClaimTick() {
       try {
         const plans = (await invoke("claim_refresh_one", { id })) || [];
         store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await pendingCheckThrottled(id)) || null };
+        // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
+        if (!plans.length) loadClaimHistory(id);
       } catch (e) {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
@@ -701,6 +722,8 @@ export const actions = {
         // 手动单号刷新 = 用户主动要最新状态，强制绕过节流
         const pending = await pendingCheckThrottled(id, true);
         store.claimable[id].pending = pending || null;
+        // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
+        if (!pending) loadClaimHistory(id);
         if (pending) {
           toast(t("m.claimPendingToast", { name, plan: pending.planName }), "ok");
         } else {
@@ -921,6 +944,8 @@ export function wireEvents() {
       // 领取结果落地后服务端状态已变（待生效/桶下发），解冻节流让下次刷新拿到真实判定
       if (p.ok !== false) delete pendingCheckAt[p.accountId];
       loadAcctQuota(p.accountId);
+      // 领取成功后历史立即刷新（本地文件读取，零上游流量），账号行「已领取过」展示用
+      if (p.ok !== false) loadClaimHistory(p.accountId);
       if (!autoClaimRunning) {
         loadClaimPreview(p.accountId).then(() => emit());
       }

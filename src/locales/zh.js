@@ -88,6 +88,8 @@ export const zh = {
   "m.claimEffectiveAt": "额度将于 {time} 生效",
   "m.claimEffectiveNow": "额度立即生效",
   "m.claimPendingTag": "已领取（待生效）",
+  "m.claimHistoryTitle": "本地领取记录（重登不丢，按 userId 记账）",
+  "m.claimHistoryLine": "已领取过 · 领于 {time}",
   "m.claimPendingTitle": "已领取此套餐，额度在生效时刻自动到账（据 billing/balance 推断）",
   "m.claimPendingToast": "「{name}」已领取「{plan}」，等待额度生效",
   "m.claimStartsAt": "预计 {time} 生效（据活动说明）",

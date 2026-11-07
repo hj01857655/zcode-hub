@@ -319,6 +319,7 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
         quota={quota}
         plan={plan}
         pending={!plan ? store.claimable[a.id]?.pending || null : null}
+        history={!plan && !store.claimable[a.id]?.pending ? store.claimHistory[a.id]?.history || null : null}
         claimDisabled={claimDisabled}
         onClaim={(id) => actions.claim(id)}
       />

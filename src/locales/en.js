@@ -88,6 +88,8 @@ export const en = {
   "m.claimEffectiveAt": "Credits activate at {time}",
   "m.claimEffectiveNow": "Credits activate immediately",
   "m.claimPendingTag": "Claimed (pending)",
+  "m.claimHistoryTitle": "Local claim history (keyed by userId — survives re-login)",
+  "m.claimHistoryLine": "Claimed at {time}",
   "m.claimPendingTitle": "Plan claimed — credits arrive automatically at the effective time (inferred from billing/balance)",
   "m.claimPendingToast": "\"{name}\" claimed \"{plan}\" — waiting for activation",
   "m.claimStartsAt": "Expected to activate at {time} (per event description)",

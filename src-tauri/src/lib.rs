@@ -397,6 +397,7 @@ async fn claim_captcha_submit(
     let rep_creds = pending.credentials.clone();
     let rep_config = pending.config.clone();
     let rep_mid = pending.device_mid.clone();
+    let rep_plan_id = pending.plan_id.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let paths = Paths::detect();
         claim::submit_claim(
@@ -450,6 +451,31 @@ async fn claim_captcha_submit(
             };
             let p = serde_json::to_value(&outcome).unwrap_or(Value::Null);
             let _ = app.emit("claim://result", &p);
+            // 领取历史落盘：键用 userId（JWT sub）而非 accountId——重登换了 accountId
+            // 也能命中同一个人的记录，退出重登不丢已领取历史。plan_id 用 rep_plan_id
+            // （模板 ID，展示名可能随投放变化）；记录失败只打日志不阻断领取结果
+            {
+                let paths = Paths::detect();
+                let user_id = claim::oauth_user_id(&paths.home, &rep_creds);
+                match user_id {
+                    Some(uid) => {
+                        let entry = store::ClaimHistoryEntry {
+                            plan_id: rep_plan_id.clone(),
+                            plan_name: pname.clone(),
+                            claimed_at: chrono::Local::now().timestamp_millis(),
+                            effective_at,
+                            ends_at: ms("ends_at"),
+                        };
+                        if let Err(e) = store::claim_history_append(&paths, &uid, entry, &aname) {
+                            eprintln!("[zsw] claim history append: {e}");
+                            flowlog::log("claim", "history-append-fail", &e);
+                        }
+                    }
+                    None => {
+                        flowlog::log("claim", "history-skip-no-uid", &format!("acct={aid}"));
+                    }
+                }
+            }
             // 诊断摘要行：领取成功写 flowlog（acct 掩码 / 套餐 / 生效时刻），
             // 系统日志页可查全库领取历史
             {
@@ -1530,6 +1556,7 @@ pub fn run() {
             provider_test,
             gateway_log_history,
             syslog_tail,
+            claim_history,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1829,6 +1856,21 @@ async fn syslog_tail(n: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
             }
         }
         Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 领取历史：按 userId（JWT sub）查询该账号的全部已领取记录。
+/// 前端账号行展示「已领取过 X · 生效 …」用；重登换 accountId 不影响命中。
+#[tauri::command]
+async fn claim_history(id: String) -> Result<Vec<store::ClaimHistoryEntry>, String> {
+    tokio::task::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let acc = load_account(&paths, &id)?;
+        let uid = claim::oauth_user_id(&paths.home, &acc.credentials)
+            .ok_or_else(|| i18n::tr("err.claim.no_uid"))?;
+        Ok(store::claim_history_for(&paths, &uid))
     })
     .await
     .map_err(|e| e.to_string())?
