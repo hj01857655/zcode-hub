@@ -34,12 +34,11 @@ const fmtCost = (n) => {
   return `$${n.toExponential(1)}`;
 };
 
-function LogRow({ l }) {
-  const [open, setOpen] = useState(false);
+function LogRow({ l, open, onToggle }) {
   const hasDetail = l.model != null || l.ms != null || l.err != null || l.attempt != null || l.stream != null;
   return (
     <div className={"x-log-item" + (hasDetail && open ? " expanded" : "")}>
-      <div className={"x-log-row" + (hasDetail ? " clickable" : "")} onClick={() => hasDetail && setOpen(!open)}>
+      <div className={"x-log-row" + (hasDetail ? " clickable" : "")} onClick={() => hasDetail && onToggle()}>
         <span className={"x-log-caret" + (hasDetail ? (open ? " open" : "") : " none")}>▸</span>
         <span className="x-log-ts" title={new Date(l.ts).toLocaleString()}>{relTime(l.ts)}</span>
         <span className="x-log-ep">
@@ -102,10 +101,14 @@ export default function GatewayLogsPage() {
   const [err, setErr] = useState("");
   const [epFilter, setEpFilter] = useState("");
   const [okFilter, setOkFilter] = useState(""); // "" | "ok" | "fail"
+  // 时间范围："" | "1h" | "6h" | "today"（"" = 全部，日志文件本身有 2000 行容量上限）
+  const [rangeFilter, setRangeFilter] = useState("");
   // 聚合维度：按账号（账号级排障：1004/资格类失败谁最集中）/ 按模型
   const [groupDim, setGroupDim] = useState("account");
   // 自由搜索：端点/账号/模型三字段模糊匹配
   const [q, setQ] = useState("");
+  // 明细行展开互斥：openKey 为当前展开行的唯一键，点开新行自动收旧行
+  const [openKey, setOpenKey] = useState(null);
   // 相对时间保鲜：30s 一次强制重渲染，让「N 秒前」不僵死
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -143,13 +146,24 @@ export default function GatewayLogsPage() {
   const eps = useMemo(() => [...new Set((logs || []).map((l) => l.ep))].sort(), [logs]);
   const filtered = useMemo(() => {
     let v = logs || [];
+    // 时间范围前置过滤（"" = 全部）：1h/6h 按 ts 差值，today 按本地日界
+    if (rangeFilter) {
+      const now = Date.now();
+      const todayStr = new Date().toDateString();
+      v = v.filter((l) => {
+        const t = new Date(l.ts).getTime();
+        if (!Number.isFinite(t)) return false;
+        if (rangeFilter === "today") return new Date(t).toDateString() === todayStr;
+        return now - t <= (rangeFilter === "1h" ? 3600e3 : 6 * 3600e3);
+      });
+    }
     if (epFilter) v = v.filter((l) => l.ep === epFilter);
     if (okFilter === "ok") v = v.filter((l) => l.ok);
     if (okFilter === "fail") v = v.filter((l) => !l.ok);
     const needle = q.trim().toLowerCase();
     if (needle) v = v.filter((l) => `${l.ep} ${l.account ?? ""} ${l.model ?? ""}`.toLowerCase().includes(needle));
     return v;
-  }, [logs, epFilter, okFilter, q]);
+  }, [logs, epFilter, okFilter, q, rangeFilter]);
 
   const stats = useMemo(() => {
     const v = filtered;
@@ -159,13 +173,26 @@ export default function GatewayLogsPage() {
     const ttfts = v.filter((l) => l.stream && typeof l.ttft === "number").map((l) => l.ttft).sort((a, b) => a - b);
     const pct = (arr, q) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : null);
     const sum = (k) => v.reduce((a, l) => a + (l[k] || 0), 0);
+    // 错误码 Top3（徽章用）：失败行按「body 业务码 → HTTP 状态码」取键计数，
+    // 与聚合表 errDist 同源；点击徽章把码写进搜索框下钻
+    const errs = {};
+    for (const l of v) {
+      if (l.ok) continue;
+      const biz = String(l.err || "").match(/"code"\s*:\s*(\d{3,4})/)?.[1];
+      const ekey = biz ? `${biz}` : String(l.status ?? "?");
+      errs[ekey] = (errs[ekey] || 0) + 1;
+    }
+    const errTop = Object.entries(errs)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([code, n]) => ({ code, n }));
     return {
       total: v.length, ok, fail: v.length - ok,
       rate: v.length ? Math.round((ok / v.length) * 100) : null,
       msP50: pct(mss, 0.5), msP95: pct(mss, 0.95),
       ttftP50: pct(ttfts, 0.5), ttftP95: pct(ttfts, 0.95),
       tin: sum("tin"), tout: sum("tout"), tcache: sum("tcr") + sum("tcw"),
-      cost: v.reduce((a, l) => a + (typeof l.cost === "number" ? l.cost : 0), 0),
+      errTop,
     };
   }, [filtered]);
 
@@ -175,20 +202,36 @@ export default function GatewayLogsPage() {
     for (const l of filtered) {
       const k = l[groupDim] ?? "—";
       let g = map.get(k);
-      if (!g) { g = { key: k, n: 0, ok: 0, mss: [], ttfts: [], tin: 0, tout: 0, tcache: 0 }; map.set(k, g); }
+      if (!g) { g = { key: k, n: 0, ok: 0, mss: [], ttfts: [], tin: 0, tout: 0, tcache: 0, errs: {} }; map.set(k, g); }
       g.n += 1;
       if (l.ok) g.ok += 1;
       if (typeof l.ms === "number") g.mss.push(l.ms);
       if (l.stream && typeof l.ttft === "number") g.ttfts.push(l.ttft);
       g.tin += l.tin || 0; g.tout += l.tout || 0; g.tcache += (l.tcr || 0) + (l.tcw || 0);
+      // 错误分布聚合：失败行按「HTTP 状态码 → body 业务码」二级取键。
+      // l.err 是上游 body 截 200 字符（JSON 时含 "code":3012 之类），正则提取业务码；
+      // 提不出就只记状态码——429×N / 3012×N / 504×N 的分布一眼可见
+      if (!l.ok) {
+        const biz = String(l.err || "").match(/"code"\s*:\s*(\d{3,4})/)?.[1];
+        const ekey = biz ? `${biz}` : String(l.status ?? "?");
+        g.errs[ekey] = (g.errs[ekey] || 0) + 1;
+      }
     }
     const pct = (arr, q) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : null);
-    return [...map.values()]
-      .map((g) => {
-        g.mss.sort((a, b) => a - b);
-        g.ttfts.sort((a, b) => a - b);
-        return { ...g, rate: g.n ? Math.round((g.ok / g.n) * 100) : null, p50: pct(g.mss, 0.5), p95: pct(g.mss, 0.95), tp50: pct(g.ttfts, 0.5) };
-      })
+    const errSummary = (errs) => Object.entries(errs)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([code, n]) => `${code}×${n}`)
+      .join(" · ");
+    const rows = [...map.values()].map((g) => {
+      g.mss.sort((a, b) => a - b);
+      g.ttfts.sort((a, b) => a - b);
+      return { ...g, errTop: errSummary(g.errs), rate: g.n ? Math.round((g.ok / g.n) * 100) : null, p50: pct(g.mss, 0.5), p95: pct(g.mss, 0.95), tp50: pct(g.ttfts, 0.5) };
+    });
+    // 迷你条形基准：全表最大 p95（有数值的行），无 p95 的组不画
+    const maxP95 = Math.max(0, ...rows.map((g) => g.p95 ?? 0));
+    return rows
+      .map((g) => ({ ...g, p95Bar: g.p95 != null && maxP95 > 0 ? g.p95 / maxP95 : null }))
       // 诊断排序：失败率高的组置顶（失败率主排序，请求量次排序）——账号多时
       // 出问题的组不再被请求量大的健康组淹没；全成功时自然退化为按量排
       .sort((a, b) => {
@@ -271,13 +314,26 @@ export default function GatewayLogsPage() {
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tin)}<small>↓</small></span><span className="x-stat-k">{t("x.tokIn")}</span></div>
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tout)}<small>↑</small></span><span className="x-stat-k">{t("x.tokOut")}</span></div>
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tcache)}<small>⚡</small></span><span className="x-stat-k">{t("x.tokCache")}</span></div>
-            <div className="x-stat"><span className="x-stat-v">{fmtCost(stats.cost)}<small>$</small></span><span className="x-stat-k">{t("xl.cost")}</span></div>
+            {stats.errTop.map(({ code, n }) => (
+              <div key={code} className="x-stat err-badge" title={t("xl.errDistTip")}
+                role="button" style={{ cursor: "pointer" }}
+                onClick={() => setQ(code)}>
+                <span className="x-stat-v fail">{n}</span>
+                <span className="x-stat-k">{code}</span>
+              </div>
+            ))}
           </div>
         </div>
 
         <div className="x-ls-filters">
           <input className="zcode-path x-ls-search" type="text" value={q}
             onChange={(e) => setQ(e.target.value)} placeholder={t("xl.searchPh")} />
+          <select className="zcode-path" value={rangeFilter} onChange={(e) => setRangeFilter(e.target.value)}>
+            <option value="">{t("xl.rangeAll")}</option>
+            <option value="1h">{t("xl.range1h")}</option>
+            <option value="6h">{t("xl.range6h")}</option>
+            <option value="today">{t("xl.rangeToday")}</option>
+          </select>
           <select className="zcode-path" value={epFilter} onChange={(e) => setEpFilter(e.target.value)}>
             <option value="">{t("xl.allEps")}</option>
             {eps.map((e) => <option key={e} value={e}>{e}</option>)}
@@ -305,6 +361,7 @@ export default function GatewayLogsPage() {
                 <span className="x-ls-agg-v">{t("x.tokIn")}</span>
                 <span className="x-ls-agg-v">{t("x.tokOut")}</span>
                 <span className="x-ls-agg-v">{t("x.tokCache")}</span>
+                <span className="x-ls-agg-v" title={t("xl.errDistTip")}>{t("xl.errDist")}</span>
               </div>
               {aggVisible.map((g) => {
                 const failed = g.rate != null && g.rate < 100;
@@ -315,11 +372,17 @@ export default function GatewayLogsPage() {
                   <span className="x-ls-agg-v">{g.n}</span>
                   <span className={"x-ls-agg-v" + (g.rate != null ? (g.rate >= 90 ? " ok" : g.rate < 60 ? " bad" : "") : "")}>{g.rate != null ? `${g.rate}%` : "—"}</span>
                   <span className="x-ls-agg-v">{g.p50 != null ? `${g.p50}ms` : "—"}</span>
-                  <span className="x-ls-agg-v">{g.p95 != null ? `${g.p95}ms` : "—"}</span>
+                  <span className="x-ls-agg-v">
+                    {g.p95 != null ? `${g.p95}ms` : "—"}
+                    {g.p95Bar != null
+                      ? <span className="x-ls-agg-bar" aria-hidden="true"><span style={{ width: `${Math.round(g.p95Bar * 100)}%` }} /></span>
+                      : null}
+                  </span>
                   <span className="x-ls-agg-v">{g.tp50 != null ? `${g.tp50}ms` : "—"}</span>
                   <span className="x-ls-agg-v">{fmtTok(g.tin)}↓</span>
                   <span className="x-ls-agg-v">{fmtTok(g.tout)}↑</span>
                   <span className="x-ls-agg-v">{fmtTok(g.tcache)}⚡</span>
+                  <span className="x-ls-agg-v x-ls-agg-errdist" title={g.errTop || undefined}>{failed ? (g.errTop || "—") : ""}</span>
                 </div>
                 );
               })}
@@ -347,7 +410,10 @@ export default function GatewayLogsPage() {
                   <span>{t("x.logColTok")}</span>
                   <span>{t("x.logColCache")}</span>
                 </div>
-                {filtered.slice().reverse().map((l) => <LogRow key={`${l.ts}|${l.ep}|${l.account}`} l={l} />)}
+                {filtered.slice().reverse().map((l) => {
+                  const key = `${l.ts}|${l.ep}|${l.account}`;
+                  return <LogRow key={key} l={l} open={openKey === key} onToggle={() => setOpenKey(openKey === key ? null : key)} />;
+                })}
               </div>
             : <div className="x-log-empty">
                 <Ic name="empty" size={18} />

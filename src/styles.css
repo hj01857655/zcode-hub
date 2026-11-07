@@ -1779,6 +1779,27 @@ input:focus-visible,
   font-family: var(--mono);
   padding: 0 12px;
 }
+/* 聚合表：错误分布列（429×N · 3012×N 格式，左对齐与数字列区分） */
+.x-ls-agg-errdist { text-align: left !important; color: var(--red-dim, #8f3434); }
+/* 聚合表：p95 迷你条形（相对全表最大值），数字下方细条 */
+.x-ls-agg-bar {
+  display: block;
+  height: 3px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  overflow: hidden;
+}
+.x-ls-agg-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--amber);
+}
+.x-ls-agg-row.has-fail .x-ls-agg-bar > span { background: var(--red); }
+/* 顶部统计条：错误码 Top3 徽章（点击写搜索框下钻） */
+.x-stat.err-badge { cursor: pointer; }
+.x-stat.err-badge:hover .x-stat-v { filter: brightness(1.2); }
 .x-log-list {
   display: flex;
   flex-direction: column;
@@ -2420,7 +2441,8 @@ html[data-theme="light"] {
 }
 .x-ls-agg-row {
   display: grid;
-  grid-template-columns: minmax(110px, 1.8fr) repeat(8, minmax(52px, 1fr));
+  /* errDist 列宽一些（错误码分布如 "429×12 · 3012×3" 需要容纳） */
+  grid-template-columns: minmax(110px, 1.8fr) repeat(8, minmax(52px, 1fr)) minmax(90px, 1.4fr);
   gap: 4px 10px;
   align-items: baseline;
   font-family: var(--mono);
