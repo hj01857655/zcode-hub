@@ -241,7 +241,7 @@ mod mac {
             base_view.setLayer(Some(&base_layer));
             base_view.setWantsLayer(true);
             base_view.setAutoresizingMask(fill_mask());
-            host.addSubview_positioned_relative_to(
+            host.addSubview_positioned_relativeTo(
                 &base_view,
                 NSWindowOrderingMode::Below,
                 Some(&webview),
@@ -266,7 +266,7 @@ mod mac {
                 (root.clone(), root)
             };
             // 紧贴在 WKWebView 下方，因而位于底色层之上
-            host.addSubview_positioned_relative_to(&outer, NSWindowOrderingMode::Below, Some(&webview));
+            host.addSubview_positioned_relativeTo(&outer, NSWindowOrderingMode::Below, Some(&webview));
 
             Some(Self {
                 webview,
@@ -288,7 +288,7 @@ mod mac {
 
         fn apply(&mut self, f: &GlassFrame, mtm: MainThreadMarker) {
             CATransaction::begin();
-            CATransaction::set_disable_actions(true);
+            CATransaction::setDisableActions(true);
 
             if self.dark != Some(f.dark) {
                 // SAFETY: AppKit 导出的外观名常量
@@ -300,14 +300,14 @@ mod mac {
             if self.base != f.base {
                 if let Some((r, g, b)) = parse_hex(&f.base) {
                     let color = CGColor::new_srgb(r, g, b, 1.0);
-                    self.base_layer.set_fill_color(Some(&color));
+                    self.base_layer.setFillColor(Some(&color));
                 }
                 self.base = f.base.clone();
             }
 
             let wv_bounds = self.webview.bounds();
             let (vw, vh) = (wv_bounds.size.width, wv_bounds.size.height);
-            let flipped = self.webview.is_flipped();
+            let flipped = self.webview.isFlipped();
 
             // 外框取得足够大：live resize 期间、前端重新提交之前，新露出的区域也有底色
             let path = CGMutablePath::new();
@@ -331,7 +331,7 @@ mod mac {
                 let entry = self.panes.entry(p.id.clone()).or_insert_with(|| {
                     let pane = Pane::new(liquid, mtm);
                     pane.set_source(desktop);
-                    root.add_subview(pane.view());
+                    root.addSubview(pane.view());
                     (pane, desktop)
                 });
                 if entry.1 != desktop {
@@ -339,12 +339,12 @@ mod mac {
                     entry.1 = desktop;
                 }
                 let view = entry.0.view();
-                view.set_frame(self.webview.convert_rect_to_view(in_webview, Some(&self.root)));
+                view.setFrame(self.webview.convertRect_toView(in_webview, Some(&self.root)));
                 entry.0.set_radius(radius);
-                view.set_autoresizing_mask(edge_mask(p.x, p.y, p.w, p.h, vw, vh));
+                view.setAutoresizingMask(edge_mask(p.x, p.y, p.w, p.h, vw, vh));
 
                 if desktop {
-                    let hole = self.webview.convert_rect_to_view(in_webview, Some(&self.base_view));
+                    let hole = self.webview.convertRect_toView(in_webview, Some(&self.base_view));
                     // SAFETY: 同上，transform 为空
                     unsafe {
                         CGMutablePath::add_rounded_rect(Some(&path), ptr::null(), hole, radius, radius)
@@ -354,12 +354,12 @@ mod mac {
             self.panes.retain(|id, (pane, _)| {
                 let keep = seen.contains(id);
                 if !keep {
-                    pane.view().remove_from_superview();
+                    pane.view().removeFromSuperview();
                 }
                 keep
             });
 
-            self.base_layer.set_path(Some(&path));
+            self.base_layer.setPath(Some(&path));
             CATransaction::commit();
         }
     }
