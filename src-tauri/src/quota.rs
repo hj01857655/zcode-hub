@@ -410,6 +410,10 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
 /// flowlog 诊断摘要行：URL 缩短为路径（域名固定不必重复）、HTTP 状态、业务码、
 /// 耗时、响应体截 2K。每次 http_get_json 调用写一行——balance/claim/touch 等
 /// app 内部上游 API 的请求级排障数据源（3012/风控/限流可追溯）。
+///
+/// 频度治理：http-ok 行只在「响应体非空且业务码异常」时落（阈值写法见下），
+/// balance/subscription 这类周期性轮询的成功响应静默——每号每轮 2-3 行的
+/// 常态成功行会把错误行淹掉，诊断价值反而下降。错误行（http-err）全量保留。
 fn http_diag_line(url: &str, status: u16, body: &str, elapsed_ms: u128) -> String {
     let path = url
         .split_once("?")
@@ -457,7 +461,16 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             Ok(r) => {
                 let status = r.status();
                 let text = r.into_string().map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
-                crate::flowlog::log("sys", "http-ok", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
+                // 频度治理：业务码正常的成功响应静默（balance/subscription 周期轮询
+                // 每号每轮 2-3 行常态成功行会淹掉错误行）；业务码异常（风控/限流/
+                // no_plan 之外的业务错）才落 http-ok-biz 行保留诊断证据
+                let biz_code = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
+                    .unwrap_or(0);
+                if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
+                    crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
+                }
                 return Ok(if text.is_empty() {
                     Value::Null
                 } else {
@@ -1432,11 +1445,57 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
 
     let mut loose: Vec<QuotaItem> = vec![];
 
+    // balances[] 已覆盖的套餐 ID 集合：桶兑底只兜「服务端没给桶行」的套餐。
+    // 兜底判据不能用「槽 items 是否为空」——balances 在兑底之后才处理，items 恒空，
+    // 守卫会失效导致 grant 与桶行按 show_name 合并双计（2026-11-07 实测：周包 5 亿被显示为 10 亿）。
+    let covered_pids: std::collections::HashSet<String> = balance
+        .get("balances")
+        .and_then(|b| b.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    ["plan_id", "planId"]
+                        .iter()
+                        .find_map(|k| item.get(k).and_then(Value::as_str).map(str::to_string))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // 桶行只带 entitlement_id 时的兜底判据：权益 ID 落在本套餐的 entitlements 里同样算已覆盖
+    let covered_eids: std::collections::HashSet<String> = balance
+        .get("balances")
+        .and_then(|b| b.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("entitlement_id").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let plan_eids = |pid: &str| -> Vec<String> {
+        balance
+            .get("plans")
+            .and_then(|p| p.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|pl| pl.get("plan_id").and_then(Value::as_str) == Some(pid))
+                    .and_then(|pl| pl.get("entitlements").and_then(Value::as_array))
+                    .map(|es| {
+                        es.iter()
+                            .filter_map(|e| e.get("entitlement_id").and_then(Value::as_str).map(str::to_string))
+                            .collect()
+                    })
+            })
+            .unwrap_or_default()
+    };
+
     // 桶兑底：balances[] 为空时（新领批次未消费，服务端只在 entitlements 里报 grant），
     // 从对应计划的 entitlements 合成桶条目——total=grant_units、remaining=grant_units；
-    // balances[] 有数则跳过（避免与用量行双计）。daily_night 桶打夜间窗口标签
+    // 该套餐已有桶行则跳过（避免与用量行双计）。daily_night 桶打夜间窗口标签
     for s in &mut slots {
-        if !s.items.is_empty() {
+        if !s.items.is_empty()
+            || covered_pids.contains(&s.pid)
+            || plan_eids(&s.pid).iter().any(|eid| covered_eids.contains(eid))
+        {
             continue;
         }
         let ents = balance
@@ -1689,5 +1748,79 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         refreshed_at: 0,
         source: String::new(),
         plans: slots,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 2026-11-07 实测响应（ShannonYoung8131 周包，used=0）：
+    /// 兑底不得与 balances[] 桶行按 show_name 合并双计——total 必须是 5 亿不是 10 亿
+    #[test]
+    fn balance_no_double_count_when_balances_present() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794010672,
+                "plans": [{
+                    "user_plan_id": "upl_2118665624914460672",
+                    "plan_id": "zcode-v3-start-plan-1106-wk",
+                    "name": "ZCODE WEEKEND BUILD",
+                    "description": "", "priority": 101, "status": "active",
+                    "starts_at": 1793964222, "ends_at": 1794186000,
+                    "entitlements": [{
+                        "entitlement_id": "ent-zcode-v3-start-plan-1106-wk-1",
+                        "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                        "unit_type": "token", "capabilities": ["model:glm-5.3-flash"],
+                        "grant_units": 500000000u64, "period": "one_time",
+                        "priority": 101, "effective_at": 1793977200
+                    }]
+                }],
+                "balances": [{
+                    "bucket_id": "bucket_2118721319940620288",
+                    "user_plan_id": "upl_2118665624914460672",
+                    "plan_id": "zcode-v3-start-plan-1106-wk",
+                    "entitlement_id": "ent-zcode-v3-start-plan-1106-wk-1",
+                    "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                    "unit_type": "token", "capabilities": ["model:glm-5.3-flash"],
+                    "priority": 101, "plan_priority": 101, "entitlement_priority": 101,
+                    "total_units": 500000000u64, "used_units": 0u64,
+                    "remaining_units": 500000000u64, "available_units": 500000000u64,
+                    "period_start": 1793964222, "period_end": 1794186000,
+                    "expires_at": 1794186000
+                }]
+            }, "logid": "t"
+        });
+        let ov = normalize_balance(&resp);
+        let slot = ov.plans.iter().find(|s| s.pid == "zcode-v3-start-plan-1106-wk").expect("slot");
+        assert_eq!(slot.items.len(), 1, "桶行与兑底条目被合并双计");
+        let it = &slot.items[0];
+        assert_eq!(it.total, Some(500_000_000.0), "total 双计: {:?}", it.total);
+        assert_eq!(it.remaining, Some(500_000_000.0), "remaining 双计: {:?}", it.remaining);
+        assert_eq!(it.used, Some(0.0));
+    }
+
+    /// balances[] 整体为空时兑底仍要生效（服务端只在 entitlements 报 grant 的场景）
+    #[test]
+    fn balance_fallback_still_works_without_buckets() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1,
+                "plans": [{
+                    "plan_id": "p1", "name": "PLAN", "priority": 1, "status": "active",
+                    "entitlements": [{
+                        "entitlement_id": "e1", "show_name": "GLM-5.3-Flash",
+                        "unit_type": "token", "grant_units": 123u64, "period": "one_time"
+                    }]
+                }],
+                "balances": []
+            }
+        });
+        let ov = normalize_balance(&resp);
+        let slot = ov.plans.iter().find(|s| s.pid == "p1").expect("slot");
+        assert_eq!(slot.items.len(), 1);
+        assert_eq!(slot.items[0].total, Some(123.0));
+        assert_eq!(slot.items[0].remaining, Some(123.0));
     }
 }
