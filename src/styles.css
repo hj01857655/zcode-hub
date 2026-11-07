@@ -2547,6 +2547,15 @@ html[data-theme="light"] {
   margin-bottom: 6px;
 }
 .x-test-out.bad .x-test-meta { color: var(--red); }
+/* 测试弹窗：诊断建议行（连接失败→去网关页启动服务等可操作提示） */
+.x-test-hintline {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
 .x-test-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--mint); }
 .x-test-dot.bad { background: var(--red); }
 /* 展开详情左右分栏：左元信息右原文，窄屏回落单列 */

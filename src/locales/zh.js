@@ -344,6 +344,8 @@ export const zh = {
   "x.testResult": "结果",
   "x.testHistory": "历史",
   "x.testAborted": "已取消",
+  "x.testConnFail": "连接失败",
+  "x.testConnFailHint": "网关服务未启动或端口不可达——到网关页启动服务后重试",
   "x.poolTripped": "熔断",
   "x.poolHealth": "✓{ok} ✗{err}",
   "x.logColTs": "时间",

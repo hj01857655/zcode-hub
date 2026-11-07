@@ -135,8 +135,16 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
       } else {
         // 非 Abort 的 fetch 异常（连接拒绝/DNS 失败——网关没启动就点测试时必现）：
         // 必须落 testResult 可见。此前 throw 给外层 guard 的 setErr，但那个 err
-        // 渲染在页面主区的 curl 下方，弹窗开着时用户看不到，表现为「点了没反应」
-        setTestResult({ ok: false, status: 0, ms: Date.now() - t0, text: stripErr(e), stream: false, proto: testProto });
+        // 渲染在页面主区的 curl 下方，弹窗开着时用户看不到，表现为「点了没反应」。
+        // 诊断化：连接类失败带可操作建议（去网关页启动服务），并把 running 状态带进结果
+        const msg = stripErr(e);
+        const connFail = /failed to fetch|networkerror|load failed|connection refused|fetch failed/i.test(msg) && !running;
+        setTestResult({
+          ok: false, status: 0, ms: Date.now() - t0,
+          text: connFail ? t("x.testConnFail") : msg,
+          hint: connFail ? t("x.testConnFailHint") : null,
+          stream: false, proto: testProto,
+        });
       }
     } finally {
       setTestBusy(false);
@@ -198,7 +206,13 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
               <div className={"x-test-out" + (testResult.ok ? "" : " bad")}>
                 <div className="x-test-meta">
                   <span className={"x-test-dot " + (testResult.ok ? "ok" : "bad")} />
-                  {testResult.status ? `HTTP ${testResult.status} · ` : ""}{testResult.ms}ms{testResult.stream ? ` · ${t("x.stream")}` : ""}{testResult.ttft != null ? ` · TTFT ${testResult.ttft}ms` : ""}
+                  {/* 状态语义：status=0 不是「HTTP 0」，按失败来源给可读词（连接失败/取消/非法体） */}
+                  {testResult.status
+                    ? `HTTP ${testResult.status} · `
+                    : testResult.hint
+                      ? `${t("x.testConnFail")} · `
+                      : ""}
+                  {testResult.ms}ms{testResult.stream ? ` · ${t("x.stream")}` : ""}{testResult.ttft != null ? ` · TTFT ${testResult.ttft}ms` : ""}
                   {(testResult.tin != null || testResult.tout != null)
                     ? ` · ${testResult.tout ?? 0}↑ / ${testResult.tin ?? 0}↓`
                     : ""}
@@ -207,6 +221,9 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
                     : ""}
                 </div>
                 <div className="x-test-text">{testResult.text}</div>
+                {testResult.hint
+                  ? <div className="x-test-hintline">{testResult.hint}</div>
+                  : null}
               </div>
             </>
           : null}

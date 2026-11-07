@@ -344,6 +344,8 @@ export const en = {
   "x.testResult": "Result",
   "x.testHistory": "History",
   "x.testAborted": "Cancelled",
+  "x.testConnFail": "Connection failed",
+  "x.testConnFailHint": "Gateway service is not running or the port is unreachable — start it on the Gateway page and retry",
   "x.poolTripped": "Tripped",
   "x.poolHealth": "✓{ok} ✗{err}",
   "x.logColTs": "Time",
