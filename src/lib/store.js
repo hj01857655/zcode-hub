@@ -35,6 +35,20 @@ const REFRESH_CLAIM_COOLDOWN_MS = 60_000;
 let refreshClaim = { running: false, done: 0, total: 0, cooldownUntil: 0 };
 let refreshTicker = null;
 
+// ---- touch 429 退避表（per-account） ----
+// touch 429 上抛后手动路径此前无退避：catch 不写 refreshedAt，用户立刻再点立刻再撞。
+// 失败也进冷却，且 429 连续命中指数升级：60s → 2min → 4min → 8min → 封顶 15min；
+// 成功或非 429 失败回退基准 60s。窗口衰减不做（内存表随重启重置，足够用）。
+const touch429Count = {};
+function touchCooldownFor(id, errMsg) {
+  const hit = String(errMsg || "").includes("429");
+  if (hit) touch429Count[id] = (touch429Count[id] || 0) + 1;
+  else touch429Count[id] = 0;
+  const base = REFRESH_CLAIM_COOLDOWN_MS;
+  const mult = Math.min(2 ** (touch429Count[id] - 1), 15 * 60 / 60); // 封顶 15min
+  return base * Math.max(mult, 1);
+}
+
 const AUTO_CLAIM_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_CLAIM_FIRST_DELAY_MS = 2 * 60 * 1000;
 // 启动后延迟做更新检查：等窗口起来、splash 散去再弹提示，不跟开机首屏抢注意力
@@ -159,7 +173,10 @@ async function loadClaimPreview(id) {
       store.claimable[id].pending = null;
     }
   } catch (e) {
-    store.claimable[id] = { plans: cur.plans || [], err: String(e), busy: false };
+    const msg = stripErr(e);
+    // touch 429 上抛：失败也进冷却（此前 catch 不写 refreshedAt，用户立刻再点立刻再撞），
+    // 429 连续命中指数升级（60s→2min→…→15min 封顶），非 429 失败回退基准
+    store.claimable[id] = { plans: cur.plans || [], err: msg, busy: false, refreshedAt: Date.now() + touchCooldownFor(id, msg) - REFRESH_CLAIM_COOLDOWN_MS };
   }
 }
 
@@ -239,7 +256,9 @@ async function awaitClaimableFresh(id) {
     // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
     if (!plans?.length) loadClaimHistory(id);
   } catch (e) {
-    store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
+    const msg = stripErr(e);
+    // touch 429 上抛：失败也进冷却（refreshedAt 语义对齐其余路径），429 连续命中指数升级
+    store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: msg, busy: false, refreshedAt: Date.now() + touchCooldownFor(id, msg) - REFRESH_CLAIM_COOLDOWN_MS };
   }
 }
 
@@ -731,8 +750,11 @@ export const actions = {
         }
       }
     } catch (e) {
-      store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: stripErr(e), busy: false };
-      toast(t("m.refreshClaimAcctErr", { name, err: stripErr(e) }), "err");
+      const msg = stripErr(e);
+      // touch 429 上抛：失败也进冷却（此前 catch 不写 refreshedAt，用户立刻再点立刻再撞），
+      // 429 连续命中指数升级（60s→2min→…→15min 封顶），非 429 失败回退基准
+      store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: msg, busy: false, refreshedAt: Date.now() + touchCooldownFor(id, msg) - REFRESH_CLAIM_COOLDOWN_MS };
+      toast(t("m.refreshClaimAcctErr", { name, err: msg }), "err");
     }
     scheduleNext(id);
     refreshOneBusy = false;
@@ -816,8 +838,10 @@ export const actions = {
             store.claimable[id].pending = await pendingCheckThrottled(id) || null;
           }
         } catch (e) {
-          store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
-          failBits.push(`${name}: ${stripErr(e)}`);
+          const msg = stripErr(e);
+          // touch 429 上抛：失败也进冷却（refreshedAt 语义对齐其余路径），429 连续命中指数升级
+          store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: msg, busy: false, refreshedAt: Date.now() + touchCooldownFor(id, msg) - REFRESH_CLAIM_COOLDOWN_MS };
+          failBits.push(`${name}: ${msg}`);
         }
         scheduleNext(id);
         emit();
