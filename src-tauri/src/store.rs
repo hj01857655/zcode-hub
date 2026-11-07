@@ -379,6 +379,14 @@ pub fn kill_zcode() -> Result<bool, String> {
     if !zcode_running() {
         return Ok(true);
     }
+    // ZCode（Electron）「关闭 = 最小化到托盘」，不响应 WM_CLOSE，只能 taskkill /F 强杀。
+    // 强杀走 TerminateProcess，进程来不及调 Shell_NotifyIcon(NIM_DELETE)，通知区留下
+    // 「幽灵图标」（悬停才消失，每次切换 +1）。因此强杀前先枚举 ZCode 进程名下的窗口，
+    // 按 (hwnd, uID) 探测已注册的托盘图标，替它调 NIM_DELETE 摘掉。
+    let removed = remove_zcode_tray_icons();
+    if removed == 0 {
+        eprintln!("[zsw] 未找到 ZCode 托盘图标（可能本来就无图标或窗口类变更），本次强杀可能残留幽灵图标");
+    }
     let _ = no_window("taskkill")
         .args(["/F", "/IM", "ZCode.exe"])
         .output();
@@ -390,6 +398,100 @@ pub fn kill_zcode() -> Result<bool, String> {
         std::thread::sleep(Duration::from_millis(400));
     }
     Ok(!zcode_running())
+}
+
+/// Windows 托盘图标归属枚举的上下文。
+#[cfg(windows)]
+struct TrayCleanup {
+    pids: Vec<u32>,
+    removed: usize,
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn tray_cleanup_proc(hwnd: isize, lparam: isize) -> i32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    let ctx = &mut *(lparam as *mut TrayCleanup);
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if ctx.pids.contains(&pid) {
+        // 不看窗口类名（Electron 的窗口类是单字符且无稳定契约），
+        // 直接按 uID 探测：GetRect 成功 = 该 (hwnd, uID) 注册过托盘图标。
+        ctx.removed += remove_tray_icons_of(hwnd);
+    }
+    1
+}
+
+/// 摘掉某个窗口名下已注册的通知区图标（`Shell_NotifyIconGetRect` 用来确认 uID 是否存在）。
+#[cfg(windows)]
+unsafe fn remove_tray_icons_of(hwnd: isize) -> usize {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::Shell::{
+        Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIM_DELETE, NOTIFYICONDATAW,
+        NOTIFYICONIDENTIFIER,
+    };
+
+    let mut removed = 0usize;
+    // Electron 的 uID 是内部常量（上游实测为 3），不同版本可能变化，故按区间探测而非写死。
+    for uid in 0u32..64 {
+        let mut ident: NOTIFYICONIDENTIFIER = std::mem::zeroed();
+        ident.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
+        ident.hWnd = hwnd;
+        ident.uID = uid;
+        let mut rect: RECT = std::mem::zeroed();
+        if Shell_NotifyIconGetRect(&ident, &mut rect) != 0 {
+            continue; // 该 uID 没有图标
+        }
+        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = hwnd;
+        nid.uID = uid;
+        nid.uFlags = NIF_ICON;
+        if Shell_NotifyIconW(NIM_DELETE, &nid) != 0 {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// 强杀前先替 ZCode 摘掉它自己的托盘图标，返回摘掉的数量。
+#[cfg(windows)]
+fn remove_zcode_tray_icons() -> usize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let pids = zcode_pids();
+    if pids.is_empty() {
+        return 0;
+    }
+    let mut ctx = TrayCleanup { pids, removed: 0 };
+    unsafe {
+        EnumWindows(Some(tray_cleanup_proc), &mut ctx as *mut TrayCleanup as isize);
+    }
+    ctx.removed
+}
+
+/// ZCode.exe 的全部 PID（tasklist 按映像名过滤）。
+#[cfg(windows)]
+fn zcode_pids() -> Vec<u32> {
+    let filter = "IMAGENAME eq ZCode.exe";
+    let out = no_window("tasklist")
+        .args(["/FI", filter, "/FO", "CSV", "/NH"])
+        .output();
+    let Ok(o) = out else {
+        return vec![];
+    };
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter_map(|l| {
+            // CSV 形如 "ZCode.exe","12345","Console",...
+            let mut cols = l.split(',');
+            let image = cols.next()?.trim_matches('"').to_lowercase();
+            if image != "zcode.exe" {
+                return None;
+            }
+            cols.next()?.trim_matches('"').parse::<u32>().ok()
+        })
+        .collect()
 }
 
 #[cfg(not(windows))]
