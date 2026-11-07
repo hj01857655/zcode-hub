@@ -227,7 +227,14 @@ pub fn claimed_pending(
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret).ok()?;
     let balance = quota::fetch_balance_raw(&token, device_mid.as_deref()).ok()?;
-    if !quota::business_ok(&balance) {
+    claimed_pending_from_balance(&balance, account_id)
+}
+
+/// claimed_pending 的纯函数核心：只依赖 balance 原始响应，不碰网络/凭据。
+/// 拆出来是为了单测可钉——判定语义（桶覆盖、effective_at 分级、starts_at
+/// 预估不参与跳过）全在这里，fixture 直接用实测响应形状。
+pub(crate) fn claimed_pending_from_balance(balance: &Value, account_id: &str) -> Option<ClaimedPending> {
+    if !quota::business_ok(balance) {
         return None;
     }
     let data = balance.get("data").unwrap_or(&Value::Null);
@@ -284,15 +291,17 @@ pub fn claimed_pending(
             })
             .min();
         if let Some(eff) = authoritative_eff {
-            if eff != 0 && now > 0 && eff <= now {
+            // 0 = 立即生效：等价于「生效时刻已到」，桶仍缺就是服务端数据未落，
+            // 与「已过而桶缺」同因，一并跳过不展示（桶随时会出现）
+            if eff == 0 || (now > 0 && eff <= now) {
                 continue;
             }
         }
-        let display_eff = Some(
-            authoritative_eff
-                .unwrap_or_else(|| pl.get("starts_at").and_then(|x| x.as_i64()).unwrap_or(0)),
-        )
-        .filter(|s| *s != 0 || authoritative_eff == Some(0));
+        // 走到这里 authoritative_eff 必为 Some(>0)（0/已过已跳过）；
+        // None 时展示值回落 starts_at（预估），starts_at 也缺则不显示时间
+        let display_eff = authoritative_eff
+            .or_else(|| pl.get("starts_at").and_then(|x| x.as_i64()))
+            .filter(|s| *s != 0);
         let ends_at = pl.get("ends_at").and_then(|x| x.as_i64());
         let name = pl
             .get("name")
@@ -678,5 +687,135 @@ pub fn failure_message(code: i64, body: &Value) -> String {
         base
     } else {
         crate::i18n::trf("claim.fail.with_server", &[("base", &base), ("server_msg", &server_msg)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 文档 §3 实测形状：active 套餐 + entitlements 有桶行覆盖 → 已生效，非待生效
+    #[test]
+    fn pending_none_when_bucket_covered() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794010672,
+                "plans": [{
+                    "plan_id": "zcode-v3-start-plan-1106-wk",
+                    "name": "ZCODE WEEKEND BUILD",
+                    "status": "active",
+                    "starts_at": 1793964222, "ends_at": 1794186000,
+                    "entitlements": [{
+                        "entitlement_id": "ent-1",
+                        "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                        "unit_type": "token", "grant_units": 500000000u64,
+                        "period": "one_time", "effective_at": 1793977200
+                    }]
+                }],
+                "balances": [{
+                    "bucket_id": "b1", "plan_id": "zcode-v3-start-plan-1106-wk",
+                    "entitlement_id": "ent-1", "show_name": "GLM-5.3-Flash",
+                    "total_units": 500000000u64, "remaining_units": 500000000u64
+                }]
+            }
+        });
+        assert!(claimed_pending_from_balance(&resp, "a1").is_none(), "桶已覆盖不应判待生效");
+    }
+
+    /// 待生效核心场景：active 且桶未下发，effective_at 在未来 → 待生效（balance 权威源）
+    #[test]
+    fn pending_when_entitlement_not_yet_in_bucket() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794000000,
+                "plans": [{
+                    "plan_id": "wk-2", "name": "ZCODE WEEKEND BUILD",
+                    "status": "active",
+                    "starts_at": 1793964222, "ends_at": 1794186000,
+                    "entitlements": [{
+                        "entitlement_id": "ent-9",
+                        "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                        "unit_type": "token", "grant_units": 500000000u64,
+                        "period": "one_time", "effective_at": 1794077200
+                    }]
+                }],
+                "balances": []
+            }
+        });
+        let p = claimed_pending_from_balance(&resp, "a1").expect("应判定待生效");
+        assert_eq!(p.plan_name, "ZCODE WEEKEND BUILD");
+        assert_eq!(p.effective_at, Some(1794077200 * 1000), "秒→毫秒换算");
+        assert_eq!(p.ends_at, Some(1794186000 * 1000));
+        assert_eq!(p.source, "balance", "权威字段存在 → balance 源");
+    }
+
+    /// 回归钉：starts_at 必然已过（活动放量时刻），无 effective_at 时不得因
+    /// 「已过即跳过」把待生效态整个跳没——只降级为预估展示
+    #[test]
+    fn pending_kept_without_effective_at_even_if_starts_at_past() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794000000,
+                "plans": [{
+                    "plan_id": "wk-3", "name": "PLAN X",
+                    "status": "active",
+                    "starts_at": 1793964222, "ends_at": 1794186000,
+                    "entitlements": [{
+                        "entitlement_id": "ent-10",
+                        "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                        "unit_type": "token", "grant_units": 100u64,
+                        "period": "one_time"
+                    }]
+                }],
+                "balances": []
+            }
+        });
+        let p = claimed_pending_from_balance(&resp, "a1").expect("starts_at 已过不得跳过待生效判定");
+        assert_eq!(p.source, "balance-estimate", "无权威字段 → 预估源");
+        assert_eq!(p.effective_at, Some(1793964222 * 1000), "展示值回落 starts_at");
+    }
+
+    /// effective_at = 0（立即生效）而桶仍缺：服务端数据未落，跳过不展示
+    #[test]
+    fn pending_skipped_when_effective_now_but_bucket_missing() {
+        let resp = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794000000,
+                "plans": [{
+                    "plan_id": "wk-4", "name": "PLAN Y",
+                    "status": "active",
+                    "entitlements": [{
+                        "entitlement_id": "ent-11",
+                        "show_name": "GLM-5.3-Flash", "meter": "model_usage",
+                        "unit_type": "token", "grant_units": 100u64,
+                        "period": "one_time", "effective_at": 0
+                    }]
+                }],
+                "balances": []
+            }
+        });
+        assert!(claimed_pending_from_balance(&resp, "a1").is_none(), "立即生效+桶缺=数据未落，不展示");
+    }
+
+    /// 非 active 套餐（如已过期）不参与判定；business_ok 不过直接 None
+    #[test]
+    fn pending_none_for_inactive_plan_or_bad_code() {
+        let inactive = json!({
+            "code": 0, "msg": "", "data": {
+                "server_time": 1794000000,
+                "plans": [{
+                    "plan_id": "old", "name": "OLD", "status": "expired",
+                    "entitlements": [{
+                        "entitlement_id": "ent-12", "show_name": "X",
+                        "unit_type": "token", "grant_units": 1u64, "period": "one_time"
+                    }]
+                }],
+                "balances": []
+            }
+        });
+        assert!(claimed_pending_from_balance(&inactive, "a1").is_none(), "非 active 不判定");
+        let bad = json!({ "code": 401, "msg": "auth", "data": null });
+        assert!(claimed_pending_from_balance(&bad, "a1").is_none(), "business_ok 不过 → None");
     }
 }
