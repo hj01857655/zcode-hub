@@ -22,6 +22,8 @@
   --color-mint: var(--mint);
   --color-mintdim: var(--mint-dim);
   --color-red: var(--red);
+  --color-ok: var(--ok-soft);
+  --color-err: var(--err-soft);
   --font-mono: var(--mono);
   --font-body: var(--body);
 }

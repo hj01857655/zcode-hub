@@ -1496,6 +1496,23 @@ async fn open_external(url: String) -> Result<(), String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 主题偏好落盘：前端 setTheme 回写，老用户首启由 main.jsx 回填一次。
+/// 主窗创建期读取——原生标题栏主题与 webview 底色首帧即正确，不闪错色。
+fn load_theme_pref() -> bool {
+    let p = Paths::detect().store_dir().join("theme.txt");
+    std::fs::read_to_string(p)
+        .map(|s| s.trim() == "light")
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_theme_pref(th: String) -> Result<(), String> {
+    let dir = Paths::detect().store_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let val = if th == "light" { "light" } else { "dark" };
+    std::fs::write(dir.join("theme.txt"), val).map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(gateway::GatewayState::new())
@@ -1549,6 +1566,7 @@ pub fn run() {
             launch_zcode,
             open_external,
             reveal_main,
+            set_theme_pref,
             gateway_start,
             gateway_stop,
             gateway_status,
@@ -1608,6 +1626,8 @@ pub fn run() {
             {
                 // 非 macOS 主窗：照 conf 声明的属性代码创建（conf windows 数组只留
                 // mac 用不到的默认项也行，但为单一来源改为全代码创建，conf 留空数组）
+                // 主题偏好决定首帧底色与原生标题栏主题（亮色主题启动不再黑底闪）
+                let light = load_theme_pref();
                 let win = tauri::WebviewWindowBuilder::new(
                     app,
                     "main",
@@ -1618,8 +1638,13 @@ pub fn run() {
                 .min_inner_size(760.0, 560.0)
                 .resizable(true)
                 .center()
-                .theme(Some(tauri::Theme::Dark))
-                .background_color(tauri::window::Color(10, 10, 12, 255))
+                .theme(Some(if light { tauri::Theme::Light } else { tauri::Theme::Dark }))
+                .background_color(tauri::window::Color(
+                    if light { 242 } else { 10 },
+                    if light { 243 } else { 10 },
+                    if light { 245 } else { 12 },
+                    255,
+                ))
                 .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI --no-proxy-server")
                 .build()?;
                 let _ = win;

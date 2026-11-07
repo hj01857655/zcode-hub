@@ -5,14 +5,17 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:5173 ws://localhost:5173; worker-src 'self' blob:; object-src 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Z·HUB</title>
+    <script src="/boot-theme.js"></script>
     <style>
       html, body { background: #0a0a0c; }
+      html[data-theme="light"] body { background: #f2f3f5; }
       #splash {
         position: fixed; inset: 0; z-index: 999;
         background: #0a0a0c;
         display: flex; align-items: center; justify-content: center;
         transition: opacity .18s ease;
       }
+      html[data-theme="light"] #splash { background: #f2f3f5; }
       #splash img {
         width: 88px; height: 88px;
         animation: splash-pulse 1.6s ease-in-out infinite;
