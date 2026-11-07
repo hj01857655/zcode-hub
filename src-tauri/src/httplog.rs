@@ -50,15 +50,19 @@ fn flow_of(url: &str) -> &'static str {
     }
 }
 
-/// Kiro 式分两行落盘：请求侧一行（method+url+请求体，有请求体才落——中间件拿不到
-/// 请求体，由各调用点已有行覆盖，见文件头注释），响应侧独立一行「→ status ms resp」。
-/// 无请求体的请求不占请求行，url 不与响应混行。
-fn log_http(status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
+/// Kiro 式结果行：「{method} {path} → status ms resp」——请求标识 + 箭头结果 +
+/// 内联响应体（截 2K），一行独立可读；请求体由各调用点已有行覆盖（中间件拿不到，
+/// 见文件头注释），req 与 resp 永不混行。
+fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
     let event = if (200..300).contains(&status) { "http-ok" } else { "http-err" };
     flowlog::log(
         flow,
         event,
-        &format!("→ {status} ms={elapsed_ms} resp={}", clip(body, RESP_CAP)),
+        &format!(
+            "{method} {} → {status} ms={elapsed_ms} resp={}",
+            short_url(url),
+            clip(body, RESP_CAP)
+        ),
     );
 }
 
@@ -88,7 +92,7 @@ pub fn logged_agent(timeout_secs: u64) -> ureq::Agent {
                             let status_text = resp.status_text().to_string();
                             match resp.into_string() {
                                 Ok(body) => {
-                                    log_http(status, &body, t0.elapsed().as_millis(), flow);
+                                    log_http(&method, &url, status, &body, t0.elapsed().as_millis(), flow);
                                     // 重建等价响应回传：调用方拿到的体完整无感
                                     match ureq::Response::new(status, &status_text, &body) {
                                         Ok(rebuilt) => Ok(rebuilt),
@@ -115,7 +119,7 @@ pub fn logged_agent(timeout_secs: u64) -> ureq::Agent {
                                 ureq::Error::Status(code, _) => *code,
                                 _ => 0,
                             };
-                            log_http(status, &e.to_string(), t0.elapsed().as_millis(), flow);
+                            log_http(&method, &url, status, &e.to_string(), t0.elapsed().as_millis(), flow);
                             Err(e)
                         }
                     }

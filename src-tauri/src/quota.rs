@@ -414,18 +414,16 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
 /// 频度治理：http-ok 行只在「响应体非空且业务码异常」时落（阈值写法见下），
 /// balance/subscription 这类周期性轮询的成功响应静默——每号每轮 2-3 行的
 /// 常态成功行会把错误行淹掉，诊断价值反而下降。错误行（http-err）全量保留。
-/// 请求侧行内容：path（域名固定剥掉 scheme，query 截掉）
-fn http_diag_path(url: &str) -> String {
-    url.split_once("?")
+/// 诊断结果行（Kiro 结果行形态）：「GET {path} → status code ms resp」——接口
+/// 标识 + 箭头结果 + 内联响应体（截 2K），一行独立可读；path 剥 scheme 与 query。
+fn http_diag_line(url: &str, status: u16, body: &str, elapsed_ms: u128) -> String {
+    let path = url
+        .split_once("?")
         .map_or(url, |(base, _)| base)
         .split("://")
         .last()
         .unwrap_or(url)
-        .to_string()
-}
-
-/// 响应侧行内容：「→ status code ms resp」，与请求行分开落——不混行
-fn http_diag_line(status: u16, body: &str, elapsed_ms: u128) -> String {
+        .to_string();
     let code = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
@@ -438,7 +436,7 @@ fn http_diag_line(status: u16, body: &str, elapsed_ms: u128) -> String {
             format!("{head}…[共 {} 字符]", s.chars().count())
         }
     };
-    format!("→ {status} code={code} ms={elapsed_ms} resp={}", clip(body, 2048))
+    format!("GET {path} → {status} code={code} ms={elapsed_ms} resp={}", clip(body, 2048))
 }
 
 fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
@@ -473,9 +471,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                     .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
                     .unwrap_or(0);
                 if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
-                    // Kiro 式两行：请求侧 path 一行、响应侧独立一行，不混
-                    crate::flowlog::log("sys", "http-req-biz", &format!("path={}", http_diag_path(url)));
-                    crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(status.into(), &text, t0.elapsed().as_millis()));
+                    crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
                 }
                 return Ok(if text.is_empty() {
                     Value::Null
@@ -486,7 +482,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             Err(ureq::Error::Status(code, r)) => {
                 let status: u16 = code;
                 let body = r.into_string().unwrap_or_default();
-                crate::flowlog::log("sys", "http-err", &http_diag_line(status, &body, t0.elapsed().as_millis()));
+                crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &body, t0.elapsed().as_millis()));
                 if let Ok(v) = serde_json::from_str::<Value>(&body) {
                     if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
                         return Err(crate::i18n::tr("err.token.biz401"));

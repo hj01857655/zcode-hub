@@ -572,13 +572,13 @@ pub fn submit_claim(
         })?;
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp.clone()));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-    // 诊断 Kiro 式两行：请求行只有请求体（{plan_id}，无敏感内容全记），响应行独立
-    // 「→ code resp」——请求与响应不混一行
+    // 诊断 Kiro 式两行：请求行只有请求体（{plan_id}，无敏感内容全记），结果行
+    // 「POST billing/claim → code resp」带接口标识——请求与响应不混一行
     crate::flowlog::log("claim", "claim-req", &format!("POST billing/claim req={{\"plan_id\":\"{plan_id}\"}}"));
     crate::flowlog::log(
         "claim",
         if code == 0 { "claim-http-ok" } else { "claim-http-err" },
-        &format!("→ code={code} resp={}", {
+        &format!("POST billing/claim → code={code} resp={}", {
             let clip = |s: &str, cap: usize| if s.chars().count() <= cap { s.to_string() } else { format!("{}…[共 {} 字符]", s.chars().take(cap).collect::<String>(), s.chars().count()) };
             clip(&resp, 2048)
         }),
