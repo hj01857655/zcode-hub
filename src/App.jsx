@@ -120,11 +120,21 @@ function SideNav({ view, setView, s, unsaved }) {
   );
 }
 
-function Toolbar({ s, active, claimableCount }) {
+function Toolbar({ s, active, claimableCount, unsaved }) {
   const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
   const cooling = Date.now() < refreshClaim.cooldownUntil;
   return (
     <section className="toolbar">
+      {/* 防丢号直入口：ZCode 在跑且登录未入库时，保存动作不再藏在添加弹窗里 */}
+      {unsaved ? (
+        <button
+          className="btn-ghost has-ic save-login-cta"
+          onClick={() => actions.capture()}
+          title={t("btn.captureTitle")}
+        >
+          <Ic name="check" size={16} /> {t("btn.saveLogin")}
+        </button>
+      ) : null}
       {claimableCount > 0 ? (
         <button
           className="btn-ghost has-ic claim-all"
@@ -231,8 +241,9 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
   const metaBits = [];
   if (!a.has_config) metaBits.push(<span key="cfg" className="no-cfg">{t("q.noCfg")}</span>);
   if (exp) {
+    // 分色与仪表盘对齐：≤5 天红（soon）、≤7 天黄（warn）；短窗口批次（≤48h）不算告警
     metaBits.push(
-      <span key="exp" className={exp.warn ? "warn-line" : ""}>
+      <span key="exp" className={exp.soon ? "soon-line" : exp.warn ? "warn-line" : ""}>
         {t("q.validUntil", { date: exp.text })}
       </span>,
     );
@@ -394,7 +405,7 @@ export default function App() {
       <div className="content">
         {view === "accounts" ? (
           <>
-            <Toolbar s={st} active={active} claimableCount={claimableCount} />
+            <Toolbar s={st} active={active} claimableCount={claimableCount} unsaved={unsaved} />
             <div className="section-head">
               <h2>{t("m.accounts")}</h2>
               <span className="count">{accQ ? `${shownAccs.length}/${st.accounts.length}` : t("m.count", { count: st.accounts.length })}</span>

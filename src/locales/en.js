@@ -166,6 +166,7 @@ export const en = {
   "m.quickLang": "Toggle language (中/EN)",
 
   "btn.saveLogin": "Save login",
+  "btn.captureTitle": "Save the current ZCode login into the account store (loss protection)",
   "btn.claimAll": "Claim all",
   "btn.claimAllTitle": "Complete verification and claim for each account (one claim per account)",
   "btn.autoClaim": "Auto claim",

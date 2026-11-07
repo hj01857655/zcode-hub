@@ -166,6 +166,7 @@ export const zh = {
   "m.quickLang": "切换语言（中/EN）",
 
   "btn.saveLogin": "保存登录",
+  "btn.captureTitle": "把当前 ZCode 登录存入账号库（防丢号）",
   "btn.claimAll": "全部领取",
   "btn.claimAllTitle": "逐账号完成安全验证并领取（每账号限领一次）",
   "btn.autoClaim": "自动领取",

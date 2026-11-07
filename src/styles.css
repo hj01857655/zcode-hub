@@ -844,6 +844,8 @@ input:focus-visible,
   background: color-mix(in srgb, var(--amber) 9%, var(--bg-2));
 }
 .warn-line { color: var(--amber) !important; }
+/* 有效期红色档（≤5 天，expireInfo.soon）：与仪表盘 dash-row-meta.soon 同语义 */
+.soon-line { color: var(--red) !important; }
 .no-cfg { color: var(--amber); opacity: .85; }
 .confirm-box .go {
   border-color: var(--amber-deep);
@@ -1108,6 +1110,15 @@ input:focus-visible,
   background: rgba(232, 163, 61, .1);
 }
 .toolbar .claim-all:disabled { opacity: .6; cursor: default; }
+/* 防丢号直入口（unsaved 时出现在工具栏首位）：mint 强调，与 claim-all 的琥珀强调同级 */
+.toolbar .save-login-cta {
+  border-color: color-mix(in srgb, var(--mint) 55%, transparent);
+  color: var(--mint);
+}
+.toolbar .save-login-cta:hover:not(:disabled) {
+  border-color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+}
 
 .captcha-win {
   background: var(--bg);
