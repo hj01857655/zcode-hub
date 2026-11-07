@@ -123,6 +123,13 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   }, [accProto]);
 
   const running = status?.running ?? false;
+  // 网关重启检测（running false→true）：上次供应商测试结果对应的是旧进程，
+  // 重启后上游状态可能已变，清掉避免展示陈旧结论
+  const prevRunning = useRef(null);
+  useEffect(() => {
+    if (prevRunning.current === false && running) setProvResult(null);
+    prevRunning.current = running;
+  }, [running]);
   // 端点输入解析出的端口与盘上不一致 = 待保存；解析失败不给保存
   const parsedPort = parseEndpoint(endpointInput);
   const portDirty = status != null && parsedPort != null && parsedPort !== status.port;

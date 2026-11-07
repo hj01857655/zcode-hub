@@ -1,7 +1,7 @@
-// 测试弹窗：请求体 JSON 编辑 + 三协议 tab（Chat / Responses / Messages），发真请求看结果
+// React 版 Gateway 测试弹窗：请求体 JSON 编辑 + 三协议 tab（Chat / Responses / Messages），发真请求看结果
 // 状态与请求逻辑自包含；Alt+←/→ 切相邻协议 tab（循环），切档重置默认体
 import { useEffect, useRef, useState } from "react";
-import { t } from "../lib/i18n.js";
+import { t, stripErr } from "../lib/i18n.js";
 
 export function GatewayTestModal({ open, onClose, status, running, guard, endpoint, apiKey }) {
   const [testProto, setTestProto] = useState("openai");
@@ -133,7 +133,10 @@ export function GatewayTestModal({ open, onClose, status, running, guard, endpoi
       if (e?.name === "AbortError") {
         setTestResult({ ok: false, status: 0, ms: Date.now() - t0, text: t("x.testAborted"), stream: false, proto: testProto });
       } else {
-        throw e;
+        // 非 Abort 的 fetch 异常（连接拒绝/DNS 失败——网关没启动就点测试时必现）：
+        // 必须落 testResult 可见。此前 throw 给外层 guard 的 setErr，但那个 err
+        // 渲染在页面主区的 curl 下方，弹窗开着时用户看不到，表现为「点了没反应」
+        setTestResult({ ok: false, status: 0, ms: Date.now() - t0, text: stripErr(e), stream: false, proto: testProto });
       }
     } finally {
       setTestBusy(false);

@@ -1777,9 +1777,9 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         "hasApiKey": !cfg.api_key.is_empty(),
         // 自启恢复标志（启动时是否自动拉起服务）
         "autoStart": cfg.auto_start,
-        // M5 扩展：池快照 + 请求日志环
+        // 池快照（请求日志不在本命令：内存环全量随 2s 轮询传输是纯死负载——
+        // 前端零消费，请求日志页走独立的 gateway_log_history 命令）
         "pool": snapshot,
-        "logs": state.shared.logs(),
         // 模型表与 /v1/models 同源：动态模型面（聚合成功后 shared.models 被覆盖），
         // 未聚合时回落静态 MODEL_LIST 初始值
         "models": state.shared.model_list(),
