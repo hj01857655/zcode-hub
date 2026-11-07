@@ -54,6 +54,23 @@ pub struct CaptchaConfig {
     pub scene_id: String,
 }
 
+/// touch 空 + balance 有「已激活未生效」套餐时的推断态：
+/// 领取后投放不再下发，但赠送池桶要等 effective_at 才进 balances[]，这个窗口
+/// touch 空 ≠ 无投放，必须由 balance 原始响应反推。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimedPending {
+    pub account_id: String,
+    /// 套餐显示名（balance plans[].name，缺失回 plan_id）
+    pub plan_name: String,
+    /// 权益生效时刻（毫秒级，最早一条；0 = 立即生效）
+    pub effective_at: Option<i64>,
+    /// 套餐有效期止（毫秒级）
+    pub ends_at: Option<i64>,
+    /// 推断依据（source 字段：balance 或 touch）
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaimOutcome {
@@ -186,6 +203,105 @@ pub fn claimable_plans(
     let mut plans = touch_plans(&token, device_mid)?;
     plans.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
     Ok(plans)
+}
+
+/// 领取待生效判定：touch 投放清单为空时，查 billing/balance 原始响应里有没有
+/// 「active 且 entitlements 尚未在 balances[] 出现桶行」的套餐。
+/// 判据说明：
+/// - 不能拿「任意 active 套餐」当已领取——常规订阅永远 active，会误报；
+/// - 赠送池（领取类）在生效前 balances[] 无对应桶行，生效后桶出现 → 判定自动消失；
+/// - entitlement_id 归属校验防止别的套餐的桶把判定顶掉。
+/// balance 抓取失败不阻塞：返回 None（宁可显示空态，不拿错误冒充「无待生效」）。
+pub fn claimed_pending(
+    home: &Path,
+    creds: &Value,
+    config: Option<&Value>,
+    device_mid: Option<String>,
+    account_id: &str,
+) -> Option<ClaimedPending> {
+    let secret = zcrypto::default_secret(home);
+    let token = claim_token(creds, config, &secret).ok()?;
+    let balance = quota::fetch_balance_raw(&token, device_mid.as_deref()).ok()?;
+    if !quota::business_ok(&balance) {
+        return None;
+    }
+    let data = balance.get("data").unwrap_or(&Value::Null);
+    let plans = data.get("plans")?.as_array()?;
+    let balances = data.get("balances").and_then(|b| b.as_array());
+
+    // 已下发的桶覆盖的 entitlement_id 集合
+    let covered_eids: std::collections::HashSet<&str> = balances
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|b| b.get("entitlement_id").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 找第一条「active 且权益尚未生效（无桶行）」的套餐；
+    // 用 server_time 做时钟基准，防本机偏差把刚生效的判成待生效
+    let now = data
+        .get("server_time")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
+    for pl in plans {
+        let active = pl
+            .get("status")
+            .and_then(|s| s.as_str())
+            .map(|s| s.eq_ignore_ascii_case("active"))
+            .unwrap_or(false);
+        if !active {
+            continue;
+        }
+        let ents = pl.get("entitlements").and_then(|e| e.as_array())?;
+        let pending_ents: Vec<&Value> = ents
+            .iter()
+            .filter(|e| {
+                let eid = e.get("entitlement_id").and_then(Value::as_str).unwrap_or("");
+                eid.is_empty() || !covered_eids.contains(eid)
+            })
+            .collect();
+        if pending_ents.is_empty() {
+            continue; // 权益全部已进桶 → 已生效，不算待生效
+        }
+        // 最早生效时刻（秒级；0 = 立即生效）。无字段时用套餐 starts_at 兜底
+        let effective_at = pending_ents
+            .iter()
+            .filter_map(|e| {
+                e.get("effective_at")
+                    .or_else(|| e.get("effectiveAt"))
+                    .and_then(|x| x.as_i64())
+            })
+            .min()
+            .or_else(|| pl.get("starts_at").and_then(|x| x.as_i64()));
+        let ends_at = pl.get("ends_at").and_then(|x| x.as_i64());
+        let name = pl
+            .get("name")
+            .and_then(|s| s.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| {
+                pl.get("plan_id")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+        // 生效时刻已过（含 0=立即生效）而桶仍缺：服务端数据未落，不展示待生效态
+        if let Some(eff) = effective_at {
+            if eff != 0 && now > 0 && eff <= now {
+                continue;
+            }
+        }
+        return Some(ClaimedPending {
+            account_id: account_id.to_string(),
+            plan_name: name,
+            effective_at: effective_at.map(|s| if s == 0 { 0 } else { s * 1000 }),
+            ends_at: ends_at.map(|s| s * 1000),
+            source: "balance".into(),
+        });
+    }
+    None
 }
 
 /// 营销触点投放：`buttons[].action.type == "claim_zcode_plan"` 才是「该号当前可领」的

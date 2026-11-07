@@ -296,6 +296,27 @@ async fn claim_refresh_one(id: String) -> Result<Vec<claim::ClaimPlan>, String> 
     .map_err(|e| e.to_string())?
 }
 
+/// touch 投放为空时的补充判定：balance 里是否有「已激活未生效」的套餐（领取待生效态）。
+/// 独立命令而不是并入 claim_refresh_one：balance 是第二次网络请求，只在 touch 空时才值得打；
+/// 失败返回 None 不报错——空态优先于错误态，不拿网络问题冒充「无可领」。
+#[tauri::command]
+async fn claim_pending_check(id: String) -> Result<Option<claim::ClaimedPending>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+        let acc = load_account(&paths, &id)?;
+        Ok(claim::claimed_pending(
+            &paths.home,
+            &acc.credentials,
+            acc.config.as_ref(),
+            Some(mid),
+            &id,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn claim_start(
     app: AppHandle,
@@ -1395,6 +1416,7 @@ pub fn run() {
             get_live_quota,
             get_account_quota,
             claim_refresh_one,
+            claim_pending_check,
             claim_start,
             claim_captcha_config,
             claim_captcha_submit,

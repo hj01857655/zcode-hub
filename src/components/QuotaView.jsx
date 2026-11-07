@@ -109,9 +109,33 @@ function ClaimStrip({ id, plan, disabled, onClaim }) {
   );
 }
 
-export function AccountQuotaSlot({ id, quota, plan, claimDisabled, onClaim }) {
+// 待生效条：touch 空 + balance 反推出的「已领取未生效」态。只读展示，无领取按钮——
+// effectiveAt 0 = 立即生效；时间格式 YYYY-MM-DD HH:mm（与领取 toast 同口径）
+function PendingStrip({ pending }) {
+  const fmt = (ts) => {
+    const d = new Date(ts);
+    const p2 = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  };
+  const bits = [];
+  if (pending.effectiveAt === 0) bits.push(t("m.claimEffectiveNow"));
+  else if (pending.effectiveAt) bits.push(t("m.claimEffectiveAt", { time: fmt(pending.effectiveAt) }));
+  if (pending.endsAt) bits.push(t("m.claimEndsAt", { time: fmt(pending.endsAt) }));
+  return (
+    <div className="claim-strip pending" title={t("m.claimPendingTitle")}>
+      <Ic name="gift" size={15} />
+      <span className="claim-name">{pending.planName}</span>
+      <span className="claim-grants">{bits.join(t("common.listSep"))}</span>
+      <span className="btn-claim pending-tag">{t("m.claimPendingTag")}</span>
+    </div>
+  );
+}
+
+export function AccountQuotaSlot({ id, quota, plan, pending, claimDisabled, onClaim }) {
   const strip = plan ? (
     <ClaimStrip id={id} plan={plan} disabled={claimDisabled} onClaim={onClaim} />
+  ) : pending ? (
+    <PendingStrip pending={pending} />
   ) : null;
 
   let inner = null;

@@ -537,6 +537,14 @@ pub(crate) fn is_active_coding_plan_entry(s: &Value) -> bool {
         && s.get("status").and_then(|v| v.as_str()) == Some("VALID")
 }
 
+/// 原始 billing/balance 抓取（不做归一化）：领取待生效判定用。
+/// normalize_balance 会把 entitlements 兑底成桶条目，「桶未下发」窗口被抹平；
+/// 待生效判定要看的正是原始响应里 plans 与 balances 的覆盖关系。
+pub(crate) fn fetch_balance_raw(token: &str, mid: Option<&str>) -> Result<Value, String> {
+    let url = format!("{BILLING_BALANCE_URL}?app_version={}", zcode_app_version());
+    http_get_json(&url, token, false, mid)
+}
+
 pub fn query_quota(tokens: &[String], mid: Option<&str>) -> Result<QuotaOverview, String> {
     if tokens.is_empty() {
         return Err(crate::i18n::tr("err.quota.no_token"));

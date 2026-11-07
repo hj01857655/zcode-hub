@@ -125,6 +125,13 @@ async function loadClaimPreview(id) {
   try {
     const plans = await invoke("claim_refresh_one", { id });
     store.claimable[id] = { plans: plans || [], err: null, busy: false };
+    // touch 空 ≠ 无事发生：补一次待生效判定（balance 里 active 且桶未下发的套餐）。
+    // 仅在 touch 空时打这第二次请求，省一次上游往返；失败静默为无待生效态
+    if (!plans?.length) {
+      store.claimable[id].pending = await invoke("claim_pending_check", { id }).catch(() => null);
+    } else {
+      store.claimable[id].pending = null;
+    }
   } catch (e) {
     store.claimable[id] = { plans: cur.plans || [], err: String(e), busy: false };
   }
@@ -189,7 +196,7 @@ async function awaitClaimableFresh(id) {
   store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
   try {
     const plans = await invoke("claim_refresh_one", { id });
-    store.claimable[id] = { plans: plans || [], err: null, busy: false };
+    store.claimable[id] = { plans: plans || [], err: null, busy: false, pending: plans?.length ? null : (await invoke("claim_pending_check", { id }).catch(() => null)) || null };
   } catch (e) {
     store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
   }
@@ -295,7 +302,7 @@ async function autoClaimTick() {
       store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
       try {
         const plans = (await invoke("claim_refresh_one", { id })) || [];
-        store.claimable[id] = { plans, err: null, busy: false };
+        store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await invoke("claim_pending_check", { id }).catch(() => null)) || null };
       } catch (e) {
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
         autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
@@ -636,9 +643,16 @@ export const actions = {
       const plans = (await invoke("claim_refresh_one", { id })) || [];
       store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
       if (plans.length) {
+        store.claimable[id].pending = null;
         toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
       } else {
-        toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail"));
+        const pending = await invoke("claim_pending_check", { id }).catch(() => null);
+        store.claimable[id].pending = pending || null;
+        if (pending) {
+          toast(t("m.claimPendingToast", { name, plan: pending.planName }), "ok");
+        } else {
+          toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail"));
+        }
       }
     } catch (e) {
       store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: stripErr(e), busy: false };
@@ -717,7 +731,13 @@ export const actions = {
         try {
           const plans = (await invoke("claim_refresh_one", { id })) || [];
           store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
-          if (plans.length) okCount++;
+          if (plans.length) {
+            store.claimable[id].pending = null;
+            okCount++;
+          } else {
+            // 批量也补待生效判定：领取后 touch 不再下发，balance 反推「已领取（待生效）」
+            store.claimable[id].pending = await invoke("claim_pending_check", { id }).catch(() => null) || null;
+          }
         } catch (e) {
           store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
           failBits.push(`${name}: ${stripErr(e)}`);
