@@ -494,6 +494,14 @@ fn zcode_pids() -> Vec<u32> {
         .collect()
 }
 
+/// 非 Windows 的优雅退出等待上限：SIGTERM 后给 ZCode 走正常退出链路
+/// （销毁托盘图标、落盘会话）的时间。
+#[cfg(not(windows))]
+const GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// SIGKILL 后的硬等待上限：还退不掉只能回报失败。
+#[cfg(not(windows))]
+const FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(8);
+
 #[cfg(not(windows))]
 pub fn kill_zcode() -> Result<bool, String> {
     if in_sandbox() {
@@ -502,22 +510,42 @@ pub fn kill_zcode() -> Result<bool, String> {
     if !zcode_running() {
         return Ok(true);
     }
+    // ① macOS 优先 AppleEvent quit：比 SIGTERM 更完整的优雅退出——Electron 走
+    //    before-quit → 窗口销毁 → 托盘清理全链路；SIGTERM 只是信号默认路径。
+    //    Linux 无此通道，直接进 SIGTERM 挂梯
+    #[cfg(target_os = "macos")]
+    {
+        let _ = no_window("osascript")
+            .args(["-e", "tell application \"ZCode\" to quit"])
+            .output();
+        let apple_deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < apple_deadline {
+            if !zcode_running() {
+                return Ok(true);
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+    }
+    // ② 优雅退出：SIGTERM 让 Electron 走正常退出链路并摘除托盘图标（SIGKILL 会留幽灵图标）。
+    // pkill -x 按精确进程名匹配，两次调用覆盖小写/驼峰两种命名
     for name in ["zcode", "ZCode"] {
         let _ = no_window("pkill").args(["-x", name]).output();
     }
-    let soft_deadline = Instant::now() + Duration::from_secs(4);
+    let soft_deadline = Instant::now() + GRACEFUL_EXIT_TIMEOUT;
     while Instant::now() < soft_deadline {
         if !zcode_running() {
             return Ok(true);
         }
         std::thread::sleep(Duration::from_millis(400));
     }
+    // ③ 超时强杀：SIGKILL 无可拦截，托盘图标可能残留（与 Windows 强杀同因）
     if zcode_running() {
+        eprintln!("[zsw] ZCode 优雅关闭超时 {}s，回退 SIGKILL（本次可能残留托盘幽灵图标）", GRACEFUL_EXIT_TIMEOUT.as_secs());
         for name in ["zcode", "ZCode"] {
             let _ = no_window("pkill").args(["-9", "-x", name]).output();
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(4);
+    let deadline = Instant::now() + FORCED_EXIT_TIMEOUT;
     while Instant::now() < deadline {
         if !zcode_running() {
             return Ok(true);
