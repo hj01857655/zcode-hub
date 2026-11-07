@@ -99,7 +99,7 @@ export const en = {
   "m.refreshClaimSkipped": "Skipped: {name}",
   "m.claimSkippedAll": "No accounts to refresh ({names})",
   "m.skipCooldown": "in failure cooldown, retry in ~{n} min",
-  "m.refreshFreshSkip": "{name} was refreshed {n}s ago — try again later",
+  "m.refreshFreshSkip": "{name} is cooling down — retry in ~{n}s",
   "m.skipHasPlans": "claimable plan pending",
   "m.toastExpand": "Click to expand full response",
   "m.toastCollapse": "Click to collapse",

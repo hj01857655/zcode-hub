@@ -723,7 +723,8 @@ export const actions = {
     if (store.claimable[id]?.busy) return;
     // 与批量同口径：60s 内刷过的号不再重查（叠加请求撞风控）
     if (Date.now() - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS) {
-      const n = Math.ceil((Date.now() - (store.claimable[id]?.refreshedAt || 0)) / 1000);
+      // 提示按剩余秒数算：429 退避把 refreshedAt 前置到未来，elapsed 会是负数
+      const n = Math.max(1, Math.ceil(((store.claimable[id]?.refreshedAt || 0) + REFRESH_CLAIM_COOLDOWN_MS - Date.now()) / 1000));
       toast(t("m.refreshFreshSkip", { name: accountName(id), n }), "warn");
       return;
     }
@@ -733,6 +734,7 @@ export const actions = {
     emit();
     try {
       const plans = (await invoke("claim_refresh_one", { id })) || [];
+      touch429Count[id] = 0; // 成功即回退基准：下次 429 从 60s 重爬（与退避表注释口径一致）
       store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
       if (plans.length) {
         store.claimable[id].pending = null;
@@ -828,6 +830,7 @@ export const actions = {
         emit();
         try {
           const plans = (await invoke("claim_refresh_one", { id })) || [];
+          touch429Count[id] = 0; // 成功即回退基准：下次 429 从 60s 重爬
           store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now() };
           if (plans.length) {
             store.claimable[id].pending = null;
