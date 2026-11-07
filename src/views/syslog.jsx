@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
-import { LogBlock } from "../components/LogBlock.jsx";
+import { LogBlock, prettyJson } from "../components/LogBlock.jsx";
 import { useVisiblePolling } from "../lib/pageVisible.js";
 
 // 行解析（flowlog 文本行）：`2026-11-07 12:00:00 [flow] event detail...`
@@ -23,6 +23,16 @@ function parseTextLine(line) {
 // 错误类事件名（着色与级别过滤的依据）：按事件名后缀/关键词判定
 const ERR_EVENTS = ["fail", "error", "timeout", "corrupt", "downgraded"];
 const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
+
+// 行展开文本：resp= 是 detail 最后一段——之前是请求/结果元数据，之后是响应体；
+// 体是 JSON 就缩进格式化（落盘时空白已压平，parse 不受影响），不是就原样
+function expandLine(detail) {
+  const i = detail.lastIndexOf("resp=");
+  if (i === -1) return detail;
+  const meta = detail.slice(0, i).trimEnd();
+  const body = detail.slice(i + 5).trim();
+  return meta ? `${meta}\n\n${prettyJson(body)}` : prettyJson(body);
+}
 
 const FLOWS = ["all", "oauth", "claim", "switch", "gateway", "sys"];
 
@@ -136,9 +146,9 @@ export default function SysLogPage() {
   );
 }
 
-// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开完整原文
-// （x-log-pre pre-wrap 全文块，与网关条目同一展开交互）。hover title 移除——
-// 2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
+// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开把这一行打全——
+// 元信息一行 + resp 响应体 JSON 缩进格式化，日志本来的样子，不做视图切换。
+// hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
   return (
@@ -152,7 +162,7 @@ function TextRow({ p }) {
       </div>
       {open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
-            <pre className="x-log-pre">{p.raw}</pre>
+            <pre className="x-log-pre">{expandLine(p.detail || p.raw)}</pre>
           </div>
         : null}
     </div>
