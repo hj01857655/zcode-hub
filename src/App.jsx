@@ -67,13 +67,17 @@ function SideNav({ view, setView, s, unsaved }) {
     return next;
   });
   // 导航项清单：视图 / 图标 / 文案键；折叠态只剩图标，全名进悬停提示
+  // 三段语义分组：运营（仪表盘/账号/邀请）、网关运维（网关/请求日志/系统日志）、辅助（设置/关于），
+  // 组间 "sep" 渲染为 hairline 分隔
   const NAV = [
     ["dashboard", "gauge", "d.menu"],
     ["accounts", "list", "m.accounts"],
+    ["referral", "link", "r.menu"],
+    ["sep", "ops-gw"],
     ["gateway", "swap", "x.menuLabel"],
     ["gatewayLogs", "clock", "xl.menuLabel"],
     ["syslog", "doc", "sl.menuLabel"],
-    ["referral", "link", "r.menu"],
+    ["sep", "gw-misc"],
     ["settings", "sliders", "common.settings"],
     ["about", "info", "a.menuLabel"],
   ];
@@ -88,16 +92,20 @@ function SideNav({ view, setView, s, unsaved }) {
           <Ic name="panel" size={15} />
         </button>
       </div>
-      {NAV.map(([v, icon, key]) => (
-        <button
-          key={v}
-          className={"side-item" + (view === v ? " on" : "")}
-          onClick={() => setView(v)}
-          title={folded ? t(key) : undefined}
-        >
-          <Ic name={icon} size={16} /> <span className="side-label">{t(key)}</span>
-        </button>
-      ))}
+      {NAV.map((n) =>
+        n[0] === "sep" ? (
+          <div key={n[1]} className="side-sep" aria-hidden="true" />
+        ) : (
+          <button
+            key={n[0]}
+            className={"side-item" + (view === n[0] ? " on" : "")}
+            onClick={() => setView(n[0])}
+            title={folded ? t(n[2]) : undefined}
+          >
+            <Ic name={n[1]} size={16} /> <span className="side-label">{t(n[2])}</span>
+          </button>
+        ),
+      )}
       <div className="side-spacer" />
       <div className="side-foot">
         <span className={"status-dot " + dotCls} title={statusTip} />
@@ -171,10 +179,11 @@ function Toolbar({ s, active, claimableCount, unsaved }) {
         {t("btn.autoClaim")}
       </button>
 
-      <button className="btn-ghost has-ic" onClick={() => actions.addAccount()} title={t("btn.addAccountTitle")}>
+      <button className="btn-primary has-ic" onClick={() => actions.addAccount()} title={t("btn.addAccountTitle")}>
         <Ic name="userPlus" size={16} /> {t("btn.addAccount")}
       </button>
 
+      <span className="tb-sep" aria-hidden="true" />
       {s.zcode_running ? (
         <button className="btn-ghost has-ic" onClick={() => actions.askKill()} title={t("btn.killZcode")}>
           <Ic name="power" size={16} /> {t("btn.killZcode")}

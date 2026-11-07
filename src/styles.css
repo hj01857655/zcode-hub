@@ -52,6 +52,10 @@ html, body {
   overflow: hidden;
 }
 
+/* 侧栏分组分隔：hairline 细线，折叠态收窄 */
+.side-sep { height: 1px; margin: 6px 10px; background: var(--hairline-soft); flex: none; }
+.sidenav.folded .side-sep { margin: 6px 8px; }
+
 .side-spacer { flex: 1; }
 
 .shell {
@@ -405,6 +409,11 @@ input:focus-visible,
   letter-spacing: .03em;
 }
 
+/* 删除键降误触：默认隐身但占位（opacity 不回流），悬停或键盘聚焦行时浮现 */
+.row-actions .icon-btn.danger { opacity: 0; transition: opacity .12s ease; }
+.row:hover .row-actions .icon-btn.danger,
+.row:focus-within .row-actions .icon-btn.danger { opacity: 1; }
+
 .row-actions {
   display: flex;
   align-items: center;
@@ -517,6 +526,8 @@ input:focus-visible,
 }
 .toolbar .tb-gear { padding: 0 11px; }
 .tb-spacer { flex: 1; }
+/* 工具栏分组分隔：进程/网关操作与账号操作之间 */
+.tb-sep { width: 1px; align-self: stretch; margin: 6px 2px; background: var(--hairline-soft); flex: none; }
 .lib-row { display: flex; gap: 8px; margin-top: 4px; }
 .lib-row .btn-ghost { flex: 1; }
 

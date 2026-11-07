@@ -140,7 +140,7 @@ export default function DashboardPage({ onNavigate }) {
           value={s.auto_claim ? t("d.on") : t("d.off")}
           cls={s.auto_claim ? "ok" : "dim"}
           ic="refresh"
-          onClick={() => actions.toggleAutoClaim()}
+          onClick={() => onNavigate?.("settings")}
         />
         <Card label={t("d.current")} value={active?.name || t("d.none")} cls={active ? "" : "dim"} ic="check" onClick={() => onNavigate?.("accounts")} />
       </div>
