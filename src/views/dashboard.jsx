@@ -104,6 +104,8 @@ export default function DashboardPage({ onNavigate }) {
   const cooling = members.filter((m) => m.cooldown_secs > 0).length;
   const inflight = members.reduce((a, m) => a + (m.inflight || 0), 0);
   const totals = quotaTotals(accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
+  // 全库待生效计数：领取后等 effective_at 的账号数（与可领卡片同形的状态面）
+  const pendingCount = accounts.filter((a) => store.claimable[a.id]?.pending).length;
 
   return (
     <div className="settings">
@@ -201,12 +203,32 @@ export default function DashboardPage({ onNavigate }) {
           ? <span className="dash-sub-total">
               <span className="dash-sub-total-label">{t("d.quotaTotal")}</span>
               {totals.length
-                ? totals.map((v) => (
-                    <span key={v.label} className="dash-q">
-                      {v.label} <b>{t("q.remainShort")} {fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
-                    </span>
-                  ))
+                ? <>
+                    {totals.slice(0, 6).map((v) => (
+                      <span key={v.label} className={"dash-q" + (v.exhausted ? " exhausted" : "")}>
+                        {v.label} <b>{t("q.remainShort")} {fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
+                      </span>
+                    ))}
+                    {totals.length > 6
+                      ? <span className="dash-q dash-q-more" title={totals.slice(6).map((v) => v.label).join("\n")}>
+                          +{totals.length - 6}
+                        </span>
+                      : null}
+                  </>
                 : <span className="dash-q dash-q-pending">…</span>}
+              {pendingCount
+                ? <span className="dash-q dash-q-pend" title={t("m.claimPendingTitle")}>
+                    <Ic name="gift" size={12} /> {t("d.pendingCount", { n: pendingCount })}
+                  </span>
+                : null}
+              <button
+                className="btn-ghost dash-sub-refresh"
+                title={t("d.refreshQuotas")}
+                aria-label={t("d.refreshQuotas")}
+                onClick={() => actions.refreshAllQuotas()}
+              >
+                <Ic name="refresh" size={13} />
+              </button>
             </span>
           : null}
       </div>

@@ -2034,6 +2034,20 @@ input:focus-visible,
 }
 .dash-sub-total-label { color: var(--ink-mute); }
 .dash-sub-total .dash-q b { color: var(--ink); }
+/* 汇总栏：已用尽池（rem=0 且 tot>0）——红字提示耗尽，而非静默消失 */
+.dash-sub-total .dash-q.exhausted b { color: var(--red); }
+/* 汇总栏：截断角标 + 手动刷新按钮 */
+.dash-q-more { color: var(--ink-mute); font-weight: 600; cursor: help; }
+.dash-sub-refresh {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+}
 /* sweep 未拉到时的占位：总额度行常驻，数字到齐即替换 */
 .dash-q-pending { color: var(--ink-mute); }
 .dash-list {

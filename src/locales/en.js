@@ -138,6 +138,8 @@ export const en = {
   "d.claimable": "Claimable",
   "d.claimableN": "{n} accounts",
   "d.claimableNone": "Nothing to claim",
+  "d.pendingCount": "{n} pending",
+  "d.refreshQuotas": "Refresh all quotas",
   "d.zcodeState": "ZCode",
   "d.zcodeRun": "Running",
   "d.zcodeStop": "Not running",

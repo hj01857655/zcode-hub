@@ -542,6 +542,24 @@ export const actions = {
     });
   },
 
+  // 全部账号额度手动刷新：仪表盘汇总栏入口。绕过 sweep 排程立即拉取，
+  // 但尊重 loadAcctQuota 自身的 busy 防重入（在拉的不重复打）；拉完后
+  // 重排各号 sweep 节奏，保持周期刷新不与手动拉取叠加
+  refreshAllQuotas() {
+    const ids = (store.state?.accounts || []).map((a) => a.id);
+    let dueCount = 0;
+    for (const id of ids) {
+      if (store.acctQuota[id]?.busy) continue;
+      dueCount++;
+      const dueAt = quotaDue[id];
+      loadAcctQuota(id).then(() => {
+        if (quotaDue[id] === dueAt) scheduleNext(id);
+      });
+    }
+    if (dueCount) emit();
+    return dueCount;
+  },
+
   async addAccount() {
     let providers;
     try { providers = await invoke("oauth_providers"); }

@@ -147,6 +147,8 @@ export function planItems(data) {
 // 全账号额度聚合：按套餐分行（套餐名做前缀），同套餐跨账号求和。
 // 不跨套餐合并：weekly build 与 start plan 的 tier_code 同为 start，只有套餐自己的
 // plan_id/name 能区分；上限放宽到 6——双套餐各出窗口+池条已 4 行，截太紧又会吞掉排尾套餐
+// 已用尽条目（tot>0 且 rem=0）保留并打 exhausted 标：一眼看出哪个池耗尽，
+// 而不是从汇总里消失让人以为没这个池
 export function quotaTotals(datas) {
   const byLabel = new Map();
   const put = (l, it) => {
@@ -166,7 +168,7 @@ export function quotaTotals(datas) {
     }
   }
   return [...byLabel.entries()]
-    .filter(([, v]) => v.rem > 0 || v.tot > 0)
-    .slice(0, 6)
-    .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot }));
+    // tot>0 即保留：rem=0 的已用尽池也要出现（带 exhausted 标），只吞全空条目
+    .filter(([, v]) => v.tot > 0 || v.rem > 0)
+    .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot, exhausted: v.tot > 0 && v.rem <= 0 }));
 }

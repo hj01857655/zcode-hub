@@ -138,6 +138,8 @@ export const zh = {
   "d.claimable": "可领取",
   "d.claimableN": "{n} 个账号",
   "d.claimableNone": "暂无可领取",
+  "d.pendingCount": "{n} 个待生效",
+  "d.refreshQuotas": "刷新全部额度",
   "d.zcodeState": "ZCode",
   "d.zcodeRun": "运行中",
   "d.zcodeStop": "未运行",
