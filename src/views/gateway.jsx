@@ -85,16 +85,17 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
       // 用户没动过输入框时跟随盘上真值（启动/换号后 key 会变）
       if (!keyTouched.current) setApiKey(s?.apiKey || "");
       if (!epTouched.current) setEndpointInput(`http://127.0.0.1:${s?.port ?? 8081}/v1`);
-      setConnectInput((v) => v || String(s?.upstreamConnectSecs ?? ""));
-      setRetriesInput((v) => v || String(s?.maxRetries ?? ""));
-      setBackoffInput((v) => v || String(s?.globalBackoffSecs ?? ""));
-      setCorsInput((v) => v || (s?.corsOrigins || []).join(", "));
-      setBodyLimitInput((v) => v || String(s?.bodyLimitMb ?? ""));
-      setLogMaxInput((v) => v || String(s?.logFileMaxMb ?? ""));
-      setFailsInput((v) => v || String(s?.allowedFails ?? ""));
-      setKeepaliveInput((v) => v || String(s?.keepaliveSecs ?? ""));
-      setTimeoutInput((v) => v || String(s?.totalTimeoutSecs ?? ""));
+      // 配置对话框打开期间不回填任何调优输入：清空/编辑途中被 2s 轮询覆盖是打断
       if (!tuneOpenRef.current) {
+        setConnectInput((v) => v || String(s?.upstreamConnectSecs ?? ""));
+        setRetriesInput((v) => v || String(s?.maxRetries ?? ""));
+        setBackoffInput((v) => v || String(s?.globalBackoffSecs ?? ""));
+        setCorsInput((v) => v || (s?.corsOrigins || []).join(", "));
+        setBodyLimitInput((v) => v || String(s?.bodyLimitMb ?? ""));
+        setLogMaxInput((v) => v || String(s?.logFileMaxMb ?? ""));
+        setFailsInput((v) => v || String(s?.allowedFails ?? ""));
+        setKeepaliveInput((v) => v || String(s?.keepaliveSecs ?? ""));
+        setTimeoutInput((v) => v || String(s?.totalTimeoutSecs ?? ""));
         setLogDiskInput(s?.logToDisk !== false);
         setStickyInput(s?.sticky !== false);
       }
@@ -203,7 +204,8 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   }, [status]);
   // 调用示例随 tab 切换：Chat（/chat/completions）/ Responses（/responses）/ Messages（/messages），真实端点 + 真实 key + 真实模型名
   const modelShown = (status?.models?.length ? status.models : ["GLM-5.3-Flash"])[0];
-  const keyShown = status?.apiKey || "<API_KEY>";
+  // 示例恒用占位符：key 输入框默认打码的意图不能被下方 curl 明文破坏，抄用后自行替换
+  const keyShown = "<API_KEY>";
   const accessCurl =
     accProto === "responses"
       ? `curl ${endpoint}/responses \\\n` +
@@ -267,7 +269,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
             placeholder="http://127.0.0.1:8081/v1" />
           <button className="btn-ghost has-ic" title={t("x.copyKey")} onClick={copyEndpoint}><Ic name="copy" size={14} /></button>
           {portDirty
-            ? <button className="btn-ghost" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
+            ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
         </div>
 
@@ -284,7 +286,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
             ? <button className="btn-ghost" onClick={copyKey}>{copied ? t("x.copied") : t("x.copyKey")}</button>
             : null}
           {keyDirty
-            ? <button className="btn-ghost" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
+            ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
         </div>
         {running && (keyDirty || portDirty) ? <div className="hint">{t("x.cfgRunningHint")}</div> : null}
@@ -438,9 +440,10 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                   </button>
                 </div>
               </div>
+              {err ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div> : null}
               <div className="pv-actions">
                 <button className="btn-ghost" onClick={() => setTuneOpen(false)}>{t("common.cancel")}</button>
-                <button className="btn-ghost" disabled={!tuneDirty || busy} onClick={() => guard(doSaveTune)}>
+                <button className="btn-primary" disabled={!tuneDirty || busy} onClick={() => guard(doSaveTune)}>
                   {t("common.save")}
                 </button>
               </div>
