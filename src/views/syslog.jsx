@@ -43,11 +43,17 @@ export default function SysLogPage() {
   // 可见性感知轮询：可见 10s / 隐藏 60s，关闸（auto=false）不轮询
   useVisiblePolling(reload, auto ? 10000 : 0, 60000, [auto]);
 
-  // 统一归一：文本行 parseTextLine；请求条目（kind=request，含 req/resp 体）加展开态标记
-  const parsed = useMemo(
-    () => (entries || []).map((e) => (e.kind === "request" ? { ...e, ts: e.ts || "" } : parseTextLine(e.line))),
-    [entries],
-  );
+  // 统一归一：文本行 parseTextLine；请求条目（kind=request，含 req/resp 体）加展开态标记。
+  // 归一后统一按时间轴排序（时间戳解析失败排最后）——两类条目来自两个文件，
+  // 后端拼装顺序是「先 flowlog 后 gateway」，不排序的话时间轴是错乱的，诊断无从对表
+  const parsed = useMemo(() => {
+    const norm = (entries || []).map((e) => (e.kind === "request" ? { ...e, ts: e.ts || "" } : parseTextLine(e.line)));
+    const tsMs = (p) => {
+      const t = p.ts ? Date.parse(p.ts.replace(" ", "T")) : NaN;
+      return Number.isFinite(t) ? t : Infinity;
+    };
+    return norm.sort((a, b) => tsMs(a) - tsMs(b));
+  }, [entries]);
   const flows = useMemo(() => {
     const seen = new Set(parsed.map((p) => p.flow ?? (p.kind === "request" ? "gateway" : "")));
     return FLOWS.filter((f) => f === "all" || seen.has(f));
