@@ -131,7 +131,6 @@ pub async fn test_provider(
     for (k, v) in &headers {
         req = req.header(k, v);
     }
-    let ms = started.elapsed().as_millis() as u64;
     let resp = req.json(&body).send().await;
     let ms = started.elapsed().as_millis() as u64;
     match resp {
