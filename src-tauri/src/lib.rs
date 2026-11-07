@@ -165,9 +165,9 @@ pub fn rebuild_tray(app: &AppHandle) {
                         .map(|a| a.name.clone())
                         .or_else(|| s.live_identity.as_ref().and_then(|i| i.label()))
                         .unwrap_or_else(|| if s.live_logged_in { i18n::tr("tray.unsaved") } else { i18n::tr("tray.logged_out") });
-                    format!("Z·SWITCH · {cur}")
+                    format!("Z·HUB · {cur}")
                 }
-                Err(_) => "Z·SWITCH".into(),
+                Err(_) => "Z·HUB".into(),
             };
             let _ = tray.set_tooltip(Some(&tip));
             if let Ok(menu) = tray_menu_inner(&app2) {
@@ -1579,7 +1579,7 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().expect("no window icon").clone())
-                .tooltip("Z·SWITCH")
+                .tooltip("Z·HUB")
                 .menu(&tray_menu_inner(app.handle())?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| {

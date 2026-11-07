@@ -1,4 +1,4 @@
-// GATEWAY 配置：端口、调用方鉴权密钥，落 ~/.zcode-switch/gateway.json（与账号库同目录）
+// GATEWAY 配置：端口、调用方鉴权密钥，落 ~/.zcode-hub/gateway.json（与账号库同目录）
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

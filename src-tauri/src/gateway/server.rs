@@ -473,7 +473,7 @@ async fn messages(
         }
         let truncated = !saw_stop;
         if truncated {
-            const TRUNC_TAIL: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}}\n\n";
+            const TRUNC_TAIL: &str = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-hub gateway)\"}}\n\n";
             let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_TAIL.as_bytes()))).await;
             if acc.chars().count() < LOG_RESP_CAP {
                 acc.push_str(TRUNC_TAIL);
@@ -593,7 +593,7 @@ async fn chat_completions(
         }
         let truncated = !saw_stop;
         if truncated {
-            const TRUNC_FRAME: &str = "data: {\"error\":{\"type\":\"server_error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}}\n\n";
+            const TRUNC_FRAME: &str = "data: {\"error\":{\"type\":\"server_error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-hub gateway)\"}}\n\n";
             let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_FRAME.as_bytes()))).await;
             if acc.chars().count() < LOG_RESP_CAP {
                 acc.push_str(TRUNC_FRAME);
@@ -1078,7 +1078,7 @@ async fn responses_endpoint(
         }
         let truncated = !saw_stop;
         if truncated {
-            const TRUNC_EVENT: &str = "event: error\ndata: {\"type\":\"error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-switch gateway)\"}\n\n";
+            const TRUNC_EVENT: &str = "event: error\ndata: {\"type\":\"error\",\"code\":\"overloaded_error\",\"message\":\"upstream stream ended before message_stop (zcode-hub gateway)\"}\n\n";
             let _ = tx.send(Ok(bytes::Bytes::from_static(TRUNC_EVENT.as_bytes()))).await;
             if acc.chars().count() < LOG_RESP_CAP {
                 acc.push_str(TRUNC_EVENT);

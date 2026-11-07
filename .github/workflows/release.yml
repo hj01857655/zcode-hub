@@ -87,7 +87,7 @@ jobs:
           # 正常 tag push 时 ref_name 就是 v* 本身
           tagName: ${{ github.event_name == 'workflow_dispatch' && format('v1.9.4-mac-test-{0}', github.sha) || github.ref_name }}
           # Windows 只出 NSIS，latest.json 里指向 *-setup.exe 而非默认的 msi
-          releaseName: 'Z·SWITCH ${{ github.event_name == ''workflow_dispatch'' && format(''v1.9.4-mac-test-{0}'', github.sha) || github.ref_name }}'
+          releaseName: 'Z·HUB ${{ github.event_name == ''workflow_dispatch'' && format(''v1.9.4-mac-test-{0}'', github.sha) || github.ref_name }}'
           releaseBody: |
             见 [README](https://github.com/${{ github.repository }}/blob/main/README.md) 了解完整功能。
 
