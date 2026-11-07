@@ -335,6 +335,9 @@ export default function App() {
   // 池行跳转定位：记住要定位的账号 id，切到账号页后滚动+闪灯
   const [focusAcc, setFocusAcc] = useState(null);
   const [accQuery, setAccQuery] = useState("");
+  const searchRef = useRef(null);
+  // 状态筛选 chips：all / claimable / pending / relogin（与文本搜索叠加，切页不残留）
+  const [accFilter, setAccFilter] = useState("all");
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
   const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
@@ -345,6 +348,8 @@ export default function App() {
   });
   const setView = (v) => {
     try { localStorage.setItem("zsw.view", v); } catch { /* 存储被禁时只是不记忆 */ }
+    // 离开账号页清搜索词与筛选：残留的过滤会让下次回页出现「3/12」式的困惑计数
+    if (v !== "accounts") { setAccQuery(""); setAccFilter("all"); }
     setViewRaw(v);
   };
   // 设置页首次打开后保活，避免每次切换都重跑 get_state 等 IPC 造成卡顿
@@ -353,6 +358,9 @@ export default function App() {
   // 定位闪灯：账号卡滚到可视区中心，闪一次边框后清除
   useEffect(() => {
     if (!focusAcc || view !== "accounts") return;
+    // 跳转目标必须可见：搜索词/筛选可能把目标行过滤掉导致 scrollIntoView 静默失效
+    if (accQuery) setAccQuery("");
+    if (accFilter !== "all") setAccFilter("all");
     const el = listRef.current?.querySelector(`[data-acc="${focusAcc}"]`);
     if (!el) return;
     el.scrollIntoView({ block: "center" });
@@ -381,7 +389,25 @@ export default function App() {
   const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning;
 
   const accQ = accQuery.trim().toLowerCase();
-  const shownAccs = accQ ? st.accounts.filter((a) => a.name.toLowerCase().includes(accQ) || a.id.toLowerCase().includes(accQ)) : st.accounts;
+  // 状态筛选谓词（与文本搜索叠加）：可领 / 待生效 / 需重登（含 JWT 过期）
+  const ACC_FILTERS = {
+    all: null,
+    claimable: (a) => (s.claimable[a.id]?.plans || []).length > 0,
+    pending: (a) => !!s.claimable[a.id]?.pending,
+    relogin: (a) => a.has_user_info === false || a.jwt_expired,
+  };
+  const shownAccs = st.accounts.filter((a) => {
+    if (accQ && !(a.name.toLowerCase().includes(accQ) || a.id.toLowerCase().includes(accQ))) return false;
+    const pred = ACC_FILTERS[accFilter] || ACC_FILTERS.all;
+    return pred ? pred(a) : true;
+  });
+  // 各档计数（全量口径，不随当前筛选变——计数是导航辅助，不是结果统计）
+  const filterCounts = {
+    all: st.accounts.length,
+    claimable: claimableCount,
+    pending: st.accounts.filter((a) => !!s.claimable[a.id]?.pending).length,
+    relogin: st.accounts.filter((a) => a.has_user_info === false || a.jwt_expired).length,
+  };
   const accTotals = quotaTotals(st.accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
 
   // 拖拽落位（#15）：按全量列表算新序，持久化成功后才改本地，失败回滚为后端序
@@ -408,12 +434,40 @@ export default function App() {
             <Toolbar s={st} active={active} claimableCount={claimableCount} unsaved={unsaved} />
             <div className="section-head">
               <h2>{t("m.accounts")}</h2>
-              <span className="count">{accQ ? `${shownAccs.length}/${st.accounts.length}` : t("m.count", { count: st.accounts.length })}</span>
+              <span className="count">{(accQ || accFilter !== "all") ? `${shownAccs.length}/${st.accounts.length}` : t("m.count", { count: st.accounts.length })}</span>
               {st.accounts.length ? (
-                <input className="acc-search" type="search" value={accQuery} placeholder={t("m.searchPh")}
-                  onChange={(e) => setAccQuery(e.target.value)} />
+                <input
+                  ref={searchRef}
+                  className="acc-search"
+                  type="search"
+                  value={accQuery}
+                  placeholder={t("m.searchPh")}
+                  onChange={(e) => setAccQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Escape 清空并还焦点：搜索是临时态，键盘一条路走完
+                    if (e.key === "Escape" && accQuery) {
+                      e.stopPropagation();
+                      setAccQuery("");
+                      searchRef.current?.focus();
+                    }
+                  }}
+                />
               ) : null}
             </div>
+            {/* 状态筛选 chips：与文本搜索叠加；各档计数为全量口径（导航辅助） */}
+            {st.accounts.length ? (
+              <div className="acc-filters">
+                {[["all", t("f.all")], ["claimable", t("f.claimable")], ["pending", t("f.pending")], ["relogin", t("f.relogin")]].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={"acc-chip" + (accFilter === key ? " on" : "")}
+                    onClick={() => setAccFilter(accFilter === key ? "all" : key)}
+                  >
+                    {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {st.accounts.length ? (
               <div className="dash-sub">
                 {t("d.quotaTotal")}

@@ -2137,6 +2137,29 @@ input:focus-visible,
 }
 .acc-search:focus { border-color: var(--amber-deep, #b8860b); }
 .acc-search::placeholder { color: var(--ink-mute); }
+/* 状态筛选 chips：搜索框下一行，与文本搜索叠加；on 态 mint 强调 */
+.acc-filters {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.acc-chip {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline, var(--ink-line, #ccc));
+  background: var(--bg-1);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.acc-chip:hover { color: var(--ink); border-color: var(--hairline); }
+.acc-chip.on {
+  color: var(--mint);
+  border-color: color-mix(in srgb, var(--mint) 55%, transparent);
+  background: color-mix(in srgb, var(--mint) 8%, transparent);
+  font-weight: 600;
+}
 
 /* ---- 主题打磨（叠加层：只增不改，靠级联覆盖早期规则） ---- */
 ::selection { background: color-mix(in srgb, var(--amber) 32%, transparent); }
