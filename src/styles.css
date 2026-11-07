@@ -2065,6 +2065,9 @@ input:focus-visible,
   font-weight: 600;
 }
 .dash-row-meta { color: var(--ink-dim); font-size: 12px; flex: none; text-align: right; }
+/* 有效期分色：7 天内黄、5 天内红（expireInfo 已算好 soon/warn，行内直接用） */
+.dash-row-meta.warn { color: var(--amber); }
+.dash-row-meta.soon { color: var(--red); }
 /* 行内额度摘录：窗口标签 + 已用百分比，70/90 两档变色（额度数据由 sweep 后台补齐） */
 .dash-row-quota {
   display: flex;
@@ -2079,6 +2082,17 @@ input:focus-visible,
 .dash-q b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .dash-q b.warn { color: var(--amber); }
 .dash-q b.danger { color: var(--red); }
+/* 仪表盘账号行：额度拉取失败态（截断展示，悬停看全文） */
+.dash-q-err { color: var(--red); }
+/* 仪表盘账号行：领取待生效态徽标（与主页 PendingStrip 同语义，行内紧凑形） */
+.dash-q-pend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--mint);
+  font-weight: 600;
+}
 .dash-empty { padding: 22px 12px; text-align: center; color: var(--ink-mute); font-size: 13px; }
 
 /* 账号管理页搜索框：section-head 右侧，与 count 同行 */

@@ -212,14 +212,24 @@ export default function DashboardPage({ onNavigate }) {
       </div>
       <div className="dash-list">
         {accounts.map((a) => {
-          const q = store.acctQuota[a.id]?.data;
+          const slot = store.acctQuota[a.id] || {};
+          const q = slot.data;
           const exp = expireInfo(q?.plan_expire, q?.plan_starts);
+          // 与主页 AccountQuotaSlot 同口径：待生效条（领取后 touch 空、桶未下发的窗口）
+          const pend = store.claimable[a.id]?.pending || null;
           return (
             <div key={a.id} className={"dash-row clickable" + (a.is_active ? " active" : "")}
               onClick={() => onNavigate?.("accounts", a.id)} role="button" title={t("d.clickHint")}>
               <span className="dash-row-name" title={a.id}>{a.name}</span>
               <TierBadges pairs={tierBadges(q)} />
               <div className="dash-row-quota">
+                {slot.busy && !q
+                  ? <span className="dash-q dash-q-pending">…</span>
+                  : slot.err && !q
+                    ? <span className="dash-q dash-q-err" title={slot.err}>
+                        {slot.err.length > 30 ? slot.err.slice(0, 30) + "…" : slot.err}
+                      </span>
+                    : null}
                 {quotaChips(q).map((c, i) => (
                   <span key={i} className="dash-q">
                     {c.label} <b className={c.pct >= 90 ? "danger" : c.pct >= 70 ? "warn" : ""}>
@@ -227,8 +237,13 @@ export default function DashboardPage({ onNavigate }) {
                     </b>
                   </span>
                 ))}
+                {pend && !q
+                  ? <span className="dash-q dash-q-pend" title={t("m.claimPendingTitle")}>
+                      <Ic name="gift" size={12} /> {t("m.claimPendingTag")}
+                    </span>
+                  : null}
               </div>
-              <span className="dash-row-meta">
+              <span className={"dash-row-meta" + (exp?.soon ? " soon" : exp?.warn ? " warn" : "")}>
                 {exp ? t("q.validUntil", { date: exp.text }) : t("q.unknown")}
               </span>
             </div>
