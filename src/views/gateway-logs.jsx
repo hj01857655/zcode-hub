@@ -66,7 +66,7 @@ function LogRow({ l, open, onToggle }) {
                 <span className="x-tok"><Ic name="clock" size={11} /> {l.ms != null ? `${l.ms}ms` : "—"}</span>
                 {l.ttft != null ? <span className="x-tok" title="TTFT">⚡{l.ttft}ms</span> : null}
                 {l.stream && l.tout > 0 && l.ttft != null && l.ms > l.ttft
-                  ? <span className="x-tok hit" title="tokens/s（首帧等待不计入）">{Math.round((l.tout / (l.ms - l.ttft)) * 1000)} tok/s</span>
+                  ? <span className="x-tok hit" title={t("xl.tokRateTip")}>{Math.round((l.tout / (l.ms - l.ttft)) * 1000)} tok/s</span>
                   : null}
               </div>
               <button className="btn-ghost x-log-copy"
@@ -80,7 +80,7 @@ function LogRow({ l, open, onToggle }) {
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
               {l.finish ? <><span className="x-log-k">{t("x.logFinish")}</span><span className="x-log-v" title={t("x.logFinishTip")}>{l.finish}</span></> : null}
               {l.ua ? <><span className="x-log-k">UA</span><span className="x-log-v" title={l.ua}>{l.ua}</span></> : null}
-              {typeof l.cost === "number" ? <><span className="x-log-k">{t("xl.cost")}</span><span className="x-log-v" title="USD · z.ai 国际站牌价折算">{fmtCost(l.cost)}</span></> : null}
+              {typeof l.cost === "number" ? <><span className="x-log-k">{t("xl.cost")}</span><span className="x-log-v" title={t("xl.costTip")}>{fmtCost(l.cost)}</span></> : null}
               <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
@@ -303,10 +303,10 @@ export default function GatewayLogsPage() {
                   ? <div className="x-stat"><span className="x-stat-v">{stats.msP95}<small>ms</small></span><span className="x-stat-k" title={t("xl.latTotal")}>p95</span></div>
                   : null}
                 {stats.ttftP50 != null
-                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP50}<small>ms</small></span><span className="x-stat-k" title="Time To First Token (stream, p50)">TTFT p50</span></div>
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP50}<small>ms</small></span><span className="x-stat-k" title={t("xl.ttftTip")}>TTFT p50</span></div>
                   : null}
                 {stats.ttftP95 != null
-                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP95}<small>ms</small></span><span className="x-stat-k" title="Time To First Token (stream, p95)">TTFT p95</span></div>
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP95}<small>ms</small></span><span className="x-stat-k" title={t("xl.ttftTip")}>TTFT p95</span></div>
                   : null}
               </div>
             : null}
@@ -354,16 +354,14 @@ export default function GatewayLogsPage() {
           ? <div className="x-log-list tree">
               <div className="x-log-head">
                 <span></span>
-                <span>{t("x.logColTs")}</span>
                 <span>{groupDim === "account" ? t("x.logColAcct") : t("x.logColModel")}</span>
                 <span>{t("xl.total")}</span>
                 <span>{t("xl.rate")}</span>
+                <span></span>
                 <span title={t("xl.latTotal")}>p50</span>
                 <span title={t("xl.latTotal")}>p95</span>
-                <span title="Time To First Token (stream, p50)">TTFT p50</span>
-                <span>{t("x.tokIn")}</span>
-                <span>{t("x.tokOut")}</span>
-                <span>{t("x.tokCache")}</span>
+                <span title={t("xl.ttftTip")}>TTFT p50</span>
+                <span title={t("xl.tokInOut")}>{t("xl.tokInOut")}</span>
                 <span title={t("xl.errDistTip")}>{t("xl.errDist")}</span>
               </div>
               {groups.map((g) => {
@@ -375,10 +373,10 @@ export default function GatewayLogsPage() {
                   <div className={"x-log-row tree-group" + (failed ? " has-fail" : "")}
                     onClick={() => toggleGroup(g.key)} role="button">
                     <span className={"x-log-caret" + (expanded ? " open" : "")}>▸</span>
-                    <span className="x-log-ts" title={`${g.key}（点击展开/收起组内 ${g.n} 条明细）`}>
+                    <span className="x-log-ts" title={`${g.key} · ${t("xl.groupTip")}`}>
                       <span className="tree-group-name">{g.key}</span>
                     </span>
-                    <span className="x-log-acct">{g.n} 条 · {g.errTop || "全成功"}</span>
+                    <span className="x-log-acct">{g.n} 条 · {g.errTop || t("xl.allOk")}</span>
                     <span className="x-log-model">{g.rate != null ? `${g.rate}%` : "—"}</span>
                     <span className={"x-log-stream" + (failed ? " " : " ok")}>&nbsp;</span>
                     <span className="x-log-code"><span className="x-log-dot" />{g.p50 != null ? `${g.p50}ms` : "—"}</span>

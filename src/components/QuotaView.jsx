@@ -26,7 +26,7 @@ export function TierChip({ tier, code }) {
 }
 
 export function TierBadges({ pairs }) {
-  if (!pairs || !pairs.length) return <span className="tier-b free">Free</span>;
+  if (!pairs || !pairs.length) return <span className="tier-b free" title={t("q.tierFree")}>{t("q.tierFree")}</span>;
   return <>{pairs.map(([tier, code], i) => <TierChip key={i} tier={tier} code={code} />)}</>;
 }
 

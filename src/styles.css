@@ -1899,9 +1899,10 @@ input:focus-visible,
 .x-log-item.expanded .x-log-detail { grid-column: 1 / -1; margin: 2px 0 4px; min-width: 0; }
 .x-log-item.expanded .x-log-detail .x-log-pre { max-height: 220px; }
 /* —— 折叠树（请求日志页）：组节点行 + 组内明细缩进区 —— */
-/* 组节点行：网格列与 x-log-head 对齐（12 列），整行可点击展开/收起 */
-.x-log-row.tree-group {
-  grid-template-columns: 18px 72px minmax(110px, 1.6fr) repeat(9, minmax(48px, 1fr));
+/* 树视图：组节点行与表头共用 10 轨模板（组行 10 个数据列，逐列对齐表头标签） */
+.x-log-row.tree-group,
+.x-log-list.tree .x-log-head {
+  grid-template-columns: 18px 72px minmax(110px, 1.6fr) repeat(7, minmax(48px, 1fr));
   font-weight: 600;
   cursor: pointer;
 }

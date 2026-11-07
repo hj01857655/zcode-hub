@@ -31,6 +31,11 @@ export default function SysLogPage() {
   const [err, setErr] = useState(null);
   // 自动刷新偏好持久化（与请求日志页同模式）
   const [auto, setAuto] = useState(() => localStorage.getItem("zsys-auto") === "1");
+  const toggleAuto = () => {
+    const next = !auto;
+    setAuto(next);
+    localStorage.setItem("zsys-auto", next ? "1" : "0");
+  };
   const [flowFilter, setFlowFilter] = useState("all");
   const [q, setQ] = useState("");
 
