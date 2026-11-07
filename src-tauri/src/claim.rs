@@ -126,6 +126,20 @@ fn claim_error(code: i64, body: &Value) -> ClaimError {
     }
 }
 
+/// 业务码解析（官方 asar 语义对齐）：code 字段可能是数字或数字字符串，
+/// 两种形态都接受；非数字字符串回 -1。claim_error 与 HTTP 错误分支共用。
+fn parse_biz_code(v: &Value) -> i64 {
+    match v.get("code") {
+        Some(c) if c.is_i64() || c.is_u64() => c.as_i64().unwrap_or(-1),
+        Some(c) => c
+            .as_str()
+            .filter(|s| s.chars().all(|ch| ch.is_ascii_digit()) && !s.is_empty())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(-1),
+        None => -1,
+    }
+}
+
 pub fn failure_payload(
     account_id: &str,
     account_name: &str,
@@ -529,8 +543,7 @@ pub fn submit_claim(
                 _ => (0, String::new()),
             };
             let biz = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
+                .map(|v| parse_biz_code(&v))
                 .unwrap_or(-1);
             // 消息构造对齐官方 Yde()：body JSON 的 error/message/msg/detail 字段
             // 优先，WAF HTML 页（官方 wX 同款判据）回退 "HTTP {status}"
