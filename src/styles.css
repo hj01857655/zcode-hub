@@ -396,6 +396,9 @@ input:focus-visible,
   background: var(--bg-2);
 }
 .icon-btn:hover { color: var(--ink); border-color: var(--hairline); background: var(--panel-2); }
+/* 切换进行中：swap 图标换成 refresh 原地旋转，行内可见反馈（强杀+冷启动最长 10s） */
+.icon-btn.switching { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 45%, transparent); }
+.icon-btn.switching .ic { animation: spin360 0.9s linear infinite; }
 .icon-btn.danger:hover { color: var(--red); border-color: var(--red-dim); background: rgba(224, 82, 82, .08); }
 
 .btn-switch {

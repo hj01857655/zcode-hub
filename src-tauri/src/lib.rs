@@ -260,12 +260,20 @@ async fn update_account_from_live(app: AppHandle, id: String) -> Result<Account,
 
 #[tauri::command]
 async fn switch_to(app: AppHandle, id: String, force: bool, restart: bool) -> Result<SwitchResult, String> {
-    let _guard = store_guard();
-    let paths = Paths::detect();
-    let hot = load_settings(&paths).hot_switch();
-    let r = store::switch_to(&paths, &id, force, restart, hot);
-    rebuild_tray(&app);
-    r
+    // store::switch_to 是全项目最重的同步阻塞路径：force 时 taskkill /F + 最长 8s
+    // 进程退出轮询 + 冷启动 ZCode，还全程持有 store_guard 互斥其他账号库操作。
+    // 必须丢 blocking 池——裸跑在 async worker 上会把 runtime 卡死整个切换时长，
+    // 期间所有其他异步命令（额度/网关状态/日志）全部停摆
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = store_guard();
+        let paths = Paths::detect();
+        let hot = load_settings(&paths).hot_switch();
+        let r = store::switch_to(&paths, &id, force, restart, hot);
+        rebuild_tray(&app);
+        r
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

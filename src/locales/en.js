@@ -186,6 +186,7 @@ export const en = {
   "btn.killZcode": "Quit ZCode",
   "btn.launchZcode": "Launch ZCode",
   "btn.switch": "Switch",
+  "btn.switching": "Switching…",
   "btn.current": "Current",
   "btn.inUse": "In use",
   "btn.quota": "Quota",

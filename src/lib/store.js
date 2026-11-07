@@ -20,6 +20,9 @@ export const store = {
   renamingText: "",     // 重命名输入框内容（受控）
   bootError: null,      // 启动失败信息
   appVer: "",
+  switching: false,     // 账号切换进行中（强杀+冷启动最长 10s，UI 需可见反馈）
+  switchingId: null,    // 正在切入的账号 id（行内旋转图标定位用）
+  busyGuard: false,     // guard 互斥锁的可见镜像（切换等重操作跑着时界面可读）
   acctQuota: {},        // id -> {data?, err?, busy}
   claimable: {},        // id -> {plans?, err?, busy}
   referral: {},         // id -> {summary?, invitees?, err?, busy}
@@ -95,12 +98,16 @@ async function refresh() {
 async function guard(fn) {
   if (busy) return;
   busy = true;
+  store.busyGuard = true;
+  emit();
   try {
     await fn();
   } catch (e) {
     toast(stripErr(e), "err");
   } finally {
     busy = false;
+    store.busyGuard = false;
+    emit();
   }
 }
 
@@ -470,27 +477,39 @@ export const actions = {
   },
 
   async doSwitch(id, force) {
-    await guard(async () => {
-      const restart = store.state.launch_after_switch;
-      const r = await invoke("switch_to", { id, force, restart });
-      if (r.already_active) {
-        toast(t("m.toastAlready", { name: r.name }), "ok");
-      } else {
-        const bits = [];
-        if (r.hot) bits.push(t("m.bitHot"));
-        if (r.killed) bits.push(t("m.bitKilled"));
-        if (r.preserved_as) bits.push(t("m.bitPreserved", { name: r.preserved_as }));
-        if (r.launched) bits.push(t("m.bitLaunched"));
-        if (r.config_stale) bits.push(t("m.bitConfigStale"));
-        const probeBad = r.probe && r.probe.kind !== "entitled";
-        if (probeBad) {
-          bits.push(t(r.probe.kind === "no_entitlement" ? "m.bitProbeNoPlan" : "m.bitProbeAuthFailed"));
+    if (store.switching) return;
+    // 先亮「切换中」再进 guard：强杀+冷启动最长 10s，guard 的互斥是静默的，
+    // 用户点完按钮看不到任何动静，会重复点或者以为死了
+    store.switching = true;
+    store.switchingId = id;
+    emit();
+    try {
+      await guard(async () => {
+        const restart = store.state.launch_after_switch;
+        const r = await invoke("switch_to", { id, force, restart });
+        if (r.already_active) {
+          toast(t("m.toastAlready", { name: r.name }), "ok");
+        } else {
+          const bits = [];
+          if (r.hot) bits.push(t("m.bitHot"));
+          if (r.killed) bits.push(t("m.bitKilled"));
+          if (r.preserved_as) bits.push(t("m.bitPreserved", { name: r.preserved_as }));
+          if (r.launched) bits.push(t("m.bitLaunched"));
+          if (r.config_stale) bits.push(t("m.bitConfigStale"));
+          const probeBad = r.probe && r.probe.kind !== "entitled";
+          if (probeBad) {
+            bits.push(t(r.probe.kind === "no_entitlement" ? "m.bitProbeNoPlan" : "m.bitProbeAuthFailed"));
+          }
+          toast(t("m.toastSwitched", { name: r.name }), (r.config_stale || probeBad) ? "warn" : "ok", bits.join(t("common.listSep")));
         }
-        toast(t("m.toastSwitched", { name: r.name }), (r.config_stale || probeBad) ? "warn" : "ok", bits.join(t("common.listSep")));
-      }
-      await refresh(); emit();
-      pokeAccount(id);
-    });
+        await refresh(); emit();
+        pokeAccount(id);
+      });
+    } finally {
+      store.switching = false;
+      store.switchingId = null;
+      emit();
+    }
   },
 
   async updateFromLive(id) {

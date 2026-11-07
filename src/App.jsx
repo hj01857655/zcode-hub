@@ -275,13 +275,13 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
         </div>
         <div className="row-actions">
           <button
-            className={"icon-btn" + (isActive ? " on" : "")}
-            title={isActive ? t("btn.current") : t("btn.switch")}
-            aria-label={isActive ? t("btn.current") : t("btn.switch")}
+            className={"icon-btn" + (isActive ? " on" : "") + (store.switchingId === a.id ? " switching" : "")}
+            title={store.switchingId === a.id ? t("btn.switching") : isActive ? t("btn.current") : t("btn.switch")}
+            aria-label={store.switchingId === a.id ? t("btn.switching") : isActive ? t("btn.current") : t("btn.switch")}
             onClick={() => actions.askSwitch(a.id)}
-            disabled={isActive}
+            disabled={isActive || store.switching}
           >
-            <Ic name={isActive ? "check" : "swap"} size={16} />
+            <Ic name={store.switchingId === a.id ? "refresh" : isActive ? "check" : "swap"} size={16} />
           </button>
           <button className="icon-btn" title={t("btn.quota")} aria-label={t("btn.quota")} onClick={() => actions.acctQuota(a.id)}>
             <Ic name="gauge" size={16} />

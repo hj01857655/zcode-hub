@@ -186,6 +186,7 @@ export const zh = {
   "btn.killZcode": "关闭 ZCode",
   "btn.launchZcode": "启动 ZCode",
   "btn.switch": "切换",
+  "btn.switching": "切换中…",
   "btn.current": "当前",
   "btn.inUse": "使用中",
   "btn.quota": "查额度",
