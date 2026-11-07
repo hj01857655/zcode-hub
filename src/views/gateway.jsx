@@ -2,7 +2,7 @@
 // 布局与设置页同构（靠左表单流 .settings），状态区置顶。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { t } from "../lib/i18n.js";
+import { t, stripErr } from "../lib/i18n.js";
 import { toast } from "../components/ui-bus.js";
 import { Ic } from "../components/iconsx.jsx";
 import { GatewayTestModal } from "../components/gateway-test.jsx";
@@ -147,7 +147,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     try {
       await fn();
     } catch (e) {
-      setErr(String(e));
+      toast(stripErr(e), "err");
     } finally {
       setBusy(false);
       refresh();
@@ -234,8 +234,14 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   });
   const doProvTest = () => guard(async () => {
     setProvResult({ testing: true });
-    const r = await invoke("provider_test", { providerId: "zcode", accountId: null });
-    setProvResult(r);
+    try {
+      const r = await invoke("provider_test", { providerId: "zcode", accountId: null });
+      setProvResult(r);
+    } catch (e) {
+      // 测试失败：条目行 tag 换成失败态（不然挂在「测试中…」不可恢复），错误全文交 guard toast
+      setProvResult({ ok: false, status: null, error: stripErr(e) });
+      throw e;
+    }
   });
 
   return (
@@ -358,9 +364,11 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         </div>
         {provOpen
           ? <div className="x-pool-models">
-              {(status?.models?.length ? status.models : []).map((n) => <span key={n} className="x-pool-tag model">{n}</span>)}
               <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
                 <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
+              </button>
+              <button className="btn-ghost" disabled={provBusy} onClick={doProvTest} title={t("x.provTest")}>
+                <Ic name="bolt" size={13} /> {t("x.provTest")}
               </button>
             </div>
           : null}
@@ -440,7 +448,6 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                   </button>
                 </div>
               </div>
-              {err ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div> : null}
               <div className="pv-actions">
                 <button className="btn-ghost" onClick={() => setTuneOpen(false)}>{t("common.cancel")}</button>
                 <button className="btn-primary" disabled={!tuneDirty || busy} onClick={() => guard(doSaveTune)}>
