@@ -4,18 +4,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
+import { Ic } from "../components/iconsx.jsx";
+import { LogBlock } from "../components/LogBlock.jsx";
 import { useVisiblePolling } from "../lib/pageVisible.js";
 
-// 行解析：`2026-11-07 12:00:00 [flow] event detail...`
+// 行解析（flowlog 文本行）：`2026-11-07 12:00:00 [flow] event detail...`
 // 解析失败的行按 raw 展示（不静默吞）——日志格式是给程序读的，出现意外行本身就是要看到的事
-function parseLine(line) {
+function parseTextLine(line) {
   const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[([^\]]+)\] ?(.*)$/);
-  if (!m) return { raw: line, ts: "", flow: "raw", event: line, detail: "" };
+  if (!m) return { kind: "text", raw: line, ts: "", flow: "raw", event: line, detail: "" };
   const [, ts, flow, rest] = m;
   const sp = rest.indexOf(" ");
   const event = sp === -1 ? rest : rest.slice(0, sp);
   const detail = sp === -1 ? "" : rest.slice(sp + 1);
-  return { raw: line, ts, flow, event, detail };
+  return { kind: "text", raw: line, ts, flow, event, detail };
 }
 
 // 错误类事件名（着色与级别过滤的依据）：按事件名后缀/关键词判定
@@ -25,7 +27,7 @@ const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
 const FLOWS = ["all", "oauth", "claim", "switch", "gateway", "sys"];
 
 export default function SysLogPage() {
-  const [lines, setLines] = useState(null);
+  const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
   // 自动刷新偏好持久化（与请求日志页同模式）
   const [auto, setAuto] = useState(() => localStorage.getItem("zsys-auto") === "1");
@@ -34,30 +36,45 @@ export default function SysLogPage() {
 
   const reload = () => {
     invoke("syslog_tail", { n: 800 })
-      .then((v) => { setLines(v || []); setErr(null); })
+      .then((v) => { setEntries(v || []); setErr(null); })
       .catch((e) => setErr(String(e)));
   };
   useEffect(() => { reload(); }, []);
   // 可见性感知轮询：可见 10s / 隐藏 60s，关闸（auto=false）不轮询
   useVisiblePolling(reload, auto ? 10000 : 0, 60000, [auto]);
 
-  const parsed = useMemo(() => (lines || []).map(parseLine), [lines]);
+  // 统一归一：文本行 parseTextLine；请求条目（kind=request，含 req/resp 体）加展开态标记
+  const parsed = useMemo(
+    () => (entries || []).map((e) => (e.kind === "request" ? { ...e, ts: e.ts || "" } : parseTextLine(e.line))),
+    [entries],
+  );
   const flows = useMemo(() => {
-    const seen = new Set(parsed.map((p) => p.flow));
+    const seen = new Set(parsed.map((p) => p.flow ?? (p.kind === "request" ? "gateway" : "")));
     return FLOWS.filter((f) => f === "all" || seen.has(f));
   }, [parsed]);
   const filtered = useMemo(() => {
     let v = parsed;
-    if (flowFilter !== "all") v = v.filter((p) => p.flow === flowFilter);
+    if (flowFilter !== "all") v = v.filter((p) => (p.flow ?? (p.kind === "request" ? "gateway" : "")) === flowFilter);
     const needle = q.trim().toLowerCase();
-    if (needle) v = v.filter((p) => `${p.event} ${p.detail}`.toLowerCase().includes(needle));
+    if (needle) {
+      v = v.filter((p) => {
+        const hay = p.kind === "request"
+          ? `${p.ep ?? ""} ${p.account ?? ""} ${p.model ?? ""} ${p.status ?? ""}`
+          : `${p.event} ${p.detail}`;
+        return hay.toLowerCase().includes(needle);
+      });
+    }
     return v;
   }, [parsed, flowFilter, q]);
 
-  const errCount = useMemo(() => parsed.filter((p) => isErrEvent(p.event)).length, [parsed]);
+  const errCount = useMemo(
+    () => parsed.filter((p) => p.kind === "text" && isErrEvent(p.event)).length + parsed.filter((p) => p.kind === "request" && p.ok === false).length,
+    [parsed],
+  );
 
   const exportLog = () => {
-    const blob = new Blob([parsed.map((p) => p.raw).join("\n")], { type: "text/plain" });
+    const body = parsed.map((p) => (p.kind === "request" ? JSON.stringify(p) : p.raw)).join("\n");
+    const blob = new Blob([body], { type: "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `syslog-${new Date().toISOString().slice(0, 19).replaceAll(":", "")}.log`;
@@ -98,7 +115,9 @@ export default function SysLogPage() {
           ? <div className="dash-empty">{err}</div>
           : filtered.length
             ? <div className="x-log-list">
-                {filtered.map((p, i) => (
+                {filtered.map((p, i) => p.kind === "request"
+                  ? <ReqEntry key={`r${i}`} p={p} />
+                  : (
                   <div key={i} className={"x-log-row sl-row" + (isErrEvent(p.event) ? " sl-err" : "")}
                     title={p.raw}>
                     <span className="x-log-ts">{p.ts}</span>
@@ -106,10 +125,43 @@ export default function SysLogPage() {
                     <span className="sl-event">{p.event}</span>
                     <span className="sl-detail" title={p.detail}>{p.detail}</span>
                   </div>
-                ))}
+                  ))}
               </div>
             : <div className="dash-empty">{t("sl.empty")}</div>}
       </section>
     </>
+  );
+}
+
+// 请求条目折叠行：头行摘要（时间/端点/账号/模型/状态/耗时），点开 LogBlock 展示
+// req/resp 原文（原文/JSON/正文/SSE 四视图切换，与请求日志页同一组件）
+function ReqEntry({ p }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={"x-log-item" + (open ? " expanded" : "")}>
+      <div className="x-log-row sl-row clickable" onClick={() => setOpen(!open)}>
+        <span className="x-log-ts" title={p.ts ? new Date(p.ts).toLocaleString() : undefined}>{p.ts ? p.ts.slice(0, 19).replace("T", " ") : "—"}</span>
+        <span className="sl-flow">[gateway]</span>
+        <span className="sl-event">
+          <span className={"x-log-method" + (String(p.ep || "").startsWith("GET") ? " get" : "")}>{(p.ep || "").split(" ")[0]}</span>
+          {(p.ep || "").split(" ").slice(1).join(" ") || p.ep || "—"}
+        </span>
+        <span className="sl-detail">
+          {p.account ?? "—"} · {p.model ?? "—"} · <span className={p.ok ? "ok" : "fail"}>{p.status ?? "—"}</span>
+          {p.ms != null ? ` · ${p.ms}ms` : ""}
+          {p.ok === false && p.err ? ` · ${String(p.err).slice(0, 80)}` : ""}
+        </span>
+      </div>
+      {open
+        ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
+            <div className="x-log-blocks">
+              {["req", "resp"].filter((k) => p[k]).map((k) => (
+                <LogBlock key={k} resp={k === "resp"} raw={p[k]}
+                  label={k === "req" ? `${t("x.logReq")} · ${p.ep || ""}` : `${t("x.logResp")} · ${p.status ?? ""}`} />
+              ))}
+            </div>
+          </div>
+        : null}
+    </div>
   );
 }

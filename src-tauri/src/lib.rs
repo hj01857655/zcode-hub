@@ -1795,12 +1795,39 @@ async fn gateway_log_history() -> Result<Vec<serde_json::Value>, String> {
     }).await.map_err(|e| e.to_string())?
 }
 
-/// 系统日志：flowlog 尾部行（oauth/claim/switch/gateway/sys 五个流的运维事件）。
-/// 行格式 `ts [flow] event detail`，前端按 [flow] 分组过滤与着色。
+/// 系统日志：两类合流——flowlog 尾部行（oauth/claim/switch/gateway/sys 运维事件）
+/// + gateway.jsonl 尾部条目（带 req/resp 体的请求日志，8K/16K 截断已有）。
+/// 返回统一条目：文本行 `{ kind:"text", line }`；请求条目 `{ kind:"request", ...entry }`
+/// （含 req/resp 原文，前端用 LogBlock 折叠展示）。
 #[tauri::command]
-async fn syslog_tail(n: Option<u32>) -> Result<Vec<String>, String> {
+async fn syslog_tail(n: Option<u32>) -> Result<Vec<serde_json::Value>, String> {
     let n = n.unwrap_or(500).clamp(1, 2000) as usize;
-    tokio::task::spawn_blocking(move || Ok(flowlog::tail(n)))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        let mut out: Vec<serde_json::Value> = Vec::new();
+        // 1. flowlog 运维事件（文本行）
+        for line in flowlog::tail(n) {
+            out.push(serde_json::json!({ "kind": "text", "line": line }));
+        }
+        // 2. gateway.jsonl 请求条目（带 req/resp 体；从未发请求时文件不存在 → 跳过）
+        let p = crate::Paths::detect().store_dir().join("gateway.jsonl");
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            let mut reqs: Vec<serde_json::Value> = content
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            // 取尾部 100 条请求（req/resp 体大，多了传输量失控；请求日志页有全量）
+            if reqs.len() > 100 {
+                reqs.drain(0..reqs.len() - 100);
+            }
+            for mut entry in reqs {
+                if let Some(o) = entry.as_object_mut() {
+                    o.insert("kind".into(), serde_json::json!("request"));
+                }
+                out.push(entry);
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
