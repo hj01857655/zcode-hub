@@ -98,7 +98,7 @@ function LogRow({ l, open, onToggle }) {
 
 export default function GatewayLogsPage() {
   const [logs, setLogs] = useState(null);
-  const [err, setErr] = useState("");
+  const [, setErr] = useState("");
   const [epFilter, setEpFilter] = useState("");
   const [okFilter, setOkFilter] = useState(""); // "" | "ok" | "fail"
   // 时间范围："" | "1h" | "6h" | "today"（"" = 全部，日志文件本身有 2000 行容量上限）
