@@ -2,7 +2,8 @@
 // 含 httplog 中间件自动记录的全部 zcode 上游接口调用摘要）。网关转发请求不在此——
 // 那是请求日志页的职责。视觉是纯文本日志流（.sl-line 连续文本行，无网格无统计卡），
 // 工具条/过滤/搜索复用请求日志页样式；数据源 syslog_tail 命令；
-// 行格式 `ts [flow] event detail`，按 [flow] 分组过滤、error 类事件整行标红。
+// 行格式 JSONL（ts/flow/event + detail 或 method/url/status/ms/body），按 [flow] 分组
+// 过滤、error 类事件整行标红；parse 失败的行按 raw 兜底展示（不静默吞）。
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
@@ -10,36 +11,38 @@ import { Ic } from "../components/iconsx.jsx";
 import { prettyJson } from "../components/LogBlock.jsx";
 import { useVisiblePolling } from "../lib/pageVisible.js";
 
-// 行解析（flowlog 文本行）：`2026-11-07 12:00:00 [flow] event detail...`
-// 解析失败的行按 raw 展示（不静默吞）——日志格式是给程序读的，出现意外行本身就是要看到的事
-function parseTextLine(line) {
-  const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[([^\]]+)\] ?(.*)$/);
-  if (!m) return { raw: line, ts: "", flow: "raw", event: line, detail: "" };
-  const [, ts, flow, rest] = m;
-  const sp = rest.indexOf(" ");
-  const event = sp === -1 ? rest : rest.slice(0, sp);
-  const detail = sp === -1 ? "" : rest.slice(sp + 1);
-  return { raw: line, ts, flow, event, detail };
+// JSONL 行解析：HTTP 事件五字段合成 meta 字符串（「{method} {url} → {status} ms={n}」
+// 形态）——HttpMeta 渲染链按 meta 正则工作，字段到 meta 的合成在此完成；
+// body 直接来自字段。解析失败的行走 raw 兜底（意外行本身就是要看到的事）。
+function parseLine(line) {
+  let o;
+  try {
+    o = JSON.parse(line);
+  } catch {
+    return { raw: line, ts: "", flow: "raw", event: line, detail: "", meta: line, body: "" };
+  }
+  if (typeof o !== "object" || !o || typeof o.flow !== "string" || typeof o.event !== "string") {
+    return { raw: line, ts: "", flow: "raw", event: line, detail: "", meta: line, body: "" };
+  }
+  const p = {
+    raw: line,
+    ts: typeof o.ts === "string" ? o.ts : "",
+    flow: o.flow,
+    event: o.event,
+    detail: typeof o.detail === "string" ? o.detail : "",
+    body: typeof o.body === "string" ? o.body : "",
+  };
+  if (o.method && o.url) {
+    p.meta = o.status != null
+      ? `${o.method} ${o.url} → ${o.status} ms=${o.ms ?? 0}`
+      : `${o.method} ${o.url}`;
+  }
+  return p;
 }
 
 // 错误类事件名（着色与级别过滤的依据）：按事件名后缀/关键词判定
 const ERR_EVENTS = ["fail", "error", "timeout", "corrupt", "downgraded"];
 const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
-
-// 行拆分：req=/resp= 是 detail 尾部锚点——http-req 行以 req= 收尾、中间件结果行
-// 以 resp= 收尾，各自把行切成「元信息 + JSON 体」两段；体是 JSON 就缩进格式化
-// （落盘时空白已压平，parse 不受影响），不是就原样。请求行与响应体分开渲染。
-// 两个锚点长度不同（req= 4 字符、resp= 5），偏移各按锚点算——统一 +5 会把 req=
-// 行的体首字符（{）切掉，prettyJson 解析失败退化原文（存量 bug，11-08 修）。
-// 已知边界：体内容里再出现 req=/resp= 字样时 lastIndexOf 切错位，只影响展开视图
-// 的归属显示，不丢行不崩溃
-function splitLine(detail) {
-  const iR = detail.lastIndexOf("resp=");
-  const iQ = detail.lastIndexOf("req=");
-  if (iQ > iR) return { meta: detail.slice(0, iQ).trimEnd(), body: detail.slice(iQ + 4).trim() };
-  if (iR !== -1) return { meta: detail.slice(0, iR).trimEnd(), body: detail.slice(iR + 5).trim() };
-  return { meta: detail, body: "" };
-}
 
 const FLOWS = ["all", "oauth", "claim", "switch", "gateway", "sys"];
 
@@ -112,9 +115,9 @@ export default function SysLogPage() {
   // 可见性感知轮询：可见 10s / 隐藏 60s，关闸（auto=false）不轮询
   useVisiblePolling(reload, auto ? 10000 : 0, 60000, [auto]);
 
-  // 统一归一：全部为文本行（后端已回归 flowlog 单源），按时间轴排序
+  // 统一归一：JSONL 行按字段结构化，按时间轴排序（ts 毫秒精度）
   const parsed = useMemo(() => {
-    const norm = (entries || []).map(parseTextLine);
+    const norm = (entries || []).map(parseLine);
     const tsMs = (p) => {
       const t = p.ts ? Date.parse(p.ts.replace(" ", "T")) : NaN;
       return Number.isFinite(t) ? t : Infinity;
@@ -129,7 +132,9 @@ export default function SysLogPage() {
     let v = parsed;
     if (flowFilter !== "all") v = v.filter((p) => p.flow === flowFilter);
     const needle = q.trim().toLowerCase();
-    if (needle) v = v.filter((p) => `${p.event} ${p.detail}`.toLowerCase().includes(needle));
+    if (needle) {
+      v = v.filter((p) => [p.event, p.detail, p.meta, p.body].filter(Boolean).join(" ").toLowerCase().includes(needle));
+    }
     return v;
   }, [parsed, flowFilter, q]);
 
@@ -177,9 +182,9 @@ export default function SysLogPage() {
   );
 }
 
-// 文本行 = 日志本体：无网格无列对齐，一行就是一条连续日志文本（ts [flow] event detail），
-// 错误行整体标红。默认单行省略，点击展开分块打全——meta 一行、resp 响应体 JSON 缩进
-// 格式化，各自独立成块；2K 级响应体只在展开视图读，列表保持日志流的滚动密度。
+// 日志行 = 日志本体：无网格无列对齐，一行就是一条连续日志文本（JSONL 行按字段渲染），
+// 错误行整体标红。默认单行省略，点击展开分块打全——meta 一行、body 响应体 JSON 缩进
+// 格式化，各自独立成块；大响应体只在展开视图读，列表保持日志流的滚动密度。
 // hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
 // 有选区时不触发展开——拖选文本松开鼠标的 click 事件不能与「点击展开/收起」互相打架，
 // 纯点击（无选中文字）才 toggle
@@ -190,7 +195,9 @@ const clickNoSelect = (fn) => (e) => {
 
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
-  const { meta, body } = splitLine(p.detail || p.raw);
+  // meta/body 在 parse 阶段已归一（JSONL 行按字段合成），非 HTTP 行 meta 兜底为 detail 全文
+  const meta = p.meta ?? p.detail ?? p.raw;
+  const body = p.body ?? "";
 
   // 单行视图：HTTP 行结构化渲染 + body 弱色全文（视觉溢出由 .sl-line 的 ellipsis
   // 收掉，DOM 不截——复制/搜索拿得到全文）；非 HTTP 行回退 sl-detail 原文。

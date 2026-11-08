@@ -1842,7 +1842,7 @@ input:focus-visible,
 }
 .x-log-row.clickable { cursor: pointer; }
 .x-log-row.clickable:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
-/* 系统日志页：纯文本日志流——行是连续文本（ts [flow] event detail 空格分隔），
+/* 系统日志页：纯文本日志流——行是连续日志文本（JSONL 行按字段渲染），
    无网格无列对齐无表头；默认单行省略，点击展开读全文，错误行整体标红 */
 .sl-line { font-family: var(--mono);
   font-size: 12px;
