@@ -531,6 +531,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
             <div className="pv-panel x-tune-panel" onClick={(e) => e.stopPropagation()}>
               <div className="pv-title">{t("x.cfgTitle")}</div>
               <div className="pv-sub">{t("x.tuneHint")}</div>
+              <div className="x-tune-section">
               <label>{t("x.tuneGroupNet")}</label>
               <div className="x-tune">
                 <div className="x-tune-item">
@@ -564,6 +565,8 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                     onChange={(e) => setTimeoutInput(e.target.value)} placeholder="600" />
                 </div>
               </div>
+              </div>
+              <div className="x-tune-section">
               <label>{t("x.tuneGroupSrv")}</label>
               <div className="x-tune">
                 <div className="x-tune-item x-tune-wide">
@@ -601,8 +604,10 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                   </button>
                 </div>
               </div>
+              </div>
               {/* 出网代理池：mode 三态切换，single 单行 / pool 多行文本域；数值与开关仅 mode≠off 时显示 */}
-              <label style={{ marginTop: 14 }}>{t("x.tuneGroupProxy")}</label>
+              <div className="x-tune-section">
+              <label>{t("x.tuneGroupProxy")}</label>
               <div className="lang-seg" style={{ width: "fit-content", marginBottom: 8 }}>
                 {["off", "single", "pool"].map((m) => (
                   <button key={m} className={"lang-opt" + (proxyModeInput === m ? " on" : "")}
@@ -664,6 +669,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                   </>
                 : null}
               <div className="hint">{t("x.proxyHint")}</div>
+              </div>
               <div className="pv-actions">
                 <button className="btn-ghost" onClick={() => setTuneOpen(false)}>{t("common.cancel")}</button>
                 <button className="btn-primary" disabled={!tuneDirty || busy} onClick={doSaveTune}>

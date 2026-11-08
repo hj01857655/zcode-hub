@@ -1400,6 +1400,49 @@ input:focus-visible,
   gap: 14px 16px;
 }
 .x-tune-wide { grid-column: 1 / -1; }
+/* 调优弹窗分组：长面板里三段（网络/服务/代理池）各自成卡，滚动时可辨 */
+.x-tune-panel .x-tune-section {
+  background: var(--panel-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 9px;
+  padding: 12px 14px 14px;
+  margin-top: 12px;
+}
+.x-tune-panel .x-tune-section:first-of-type { margin-top: 6px; }
+/* 组标题：mono 字距风格不变，前置琥珀短条提辨识 */
+.x-tune-panel .x-tune-section > label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+}
+.x-tune-panel .x-tune-section > label::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--amber);
+  opacity: .75;
+}
+/* 容器已有边框，组内开关行的分隔线弱化为仅间距 */
+.x-tune-panel .x-tune-section .x-tune-switch { margin-top: 12px; }
+/* 弹窗内 hint：对齐 .settings .hint 语言，字号小一档、无分隔线 */
+.x-tune-panel .hint {
+  font-size: 12px;
+  color: var(--ink-mute);
+  line-height: 1.7;
+  margin-top: 10px;
+}
+/* 操作行常驻：面板滚动时保存/取消贴底不卷走（负 margin 吃掉面板 padding 再补回） */
+.x-tune-panel .pv-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 2;
+  margin: 14px -26px -18px;
+  padding: 12px 26px;
+  background: var(--panel);
+  border-top: 1px solid var(--hairline);
+}
 /* 开关行在网格之外（display:flex 横排），与上方数值组用细分隔线 + 与组间距对齐的 8px */
 .x-tune-panel .x-tune-switch {
   display: flex;
