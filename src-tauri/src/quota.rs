@@ -3,7 +3,7 @@ use crate::zcrypto;
 use serde_json::Value;
 use std::path::Path;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 fn no_window(prog: &str) -> std::process::Command {
@@ -439,12 +439,62 @@ fn http_diag_line(url: &str, status: u16, body: &str, elapsed_ms: u128) -> Strin
     format!("GET {path} → {status} code={code} ms={elapsed_ms} resp={}", clip(body, 2048))
 }
 
+/// 凭据冷却表：HTTP 401/403 或业务 401 的凭据记 15 分钟冷却，期间 http_get_json
+/// 直接 Err 不发请求——过期令牌不再参与每轮额度轮询（对齐 claim 侧 touch 429
+/// 退避的思路）。指纹用凭据哈希不落明文；冷却到期自动移除，换号重登自然生效。
+const CRED_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+
+fn cred_fingerprint(token: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+fn mark_cred_cooldown(token: &str) {
+    let fp = cred_fingerprint(token);
+    let tail = fp[12..].to_string();
+    let mut m = cred_cooldown_map().lock().unwrap_or_else(|e| e.into_inner());
+    m.insert(fp, Instant::now() + CRED_COOLDOWN);
+    crate::flowlog::log("sys", "http-err",
+        &format!("cred-cooldown cred=…{tail} 停止请求 {} 分钟（401/403）", CRED_COOLDOWN.as_secs() / 60));
+}
+
+fn cred_cooled(token: &str) -> bool {
+    let fp = cred_fingerprint(token);
+    let now = Instant::now();
+    let mut m = cred_cooldown_map().lock().unwrap_or_else(|e| e.into_inner());
+    match m.get(&fp) {
+        Some(deadline) if *deadline > now => true,
+        _ => {
+            m.remove(&fp);
+            false
+        }
+    }
+}
+
+fn cred_cooldown_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, Instant>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
+    // 冷却命中直接 Err：不发请求，上抛到 UI 显示「已冷却」，额度轮询对过期凭据静默跳过
+    if cred_cooled(token) {
+        return Err(crate::i18n::tr("err.quota.cred_cooldown"));
+    }
     let retry_delays = [500u64, 1500, 4000];
-    // 统一记录层：quota/balance/touch 读取链经 httplog 共享 Agent，
-    // 中间件自动落 flowlog（URL/方法/状态/耗时/响应体截 2K），系统日志页可查
+    // quota 读取链自建裸 Agent（不挂 httplog middleware）：每响应只落本函数的
+    // 诊断行一行（http-ok-biz/http-err + http_diag_line），避免与 middleware 行
+    // 同响应双行刷屏；连接池独立对低频轮询无影响
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    let agent = AGENT.get_or_init(|| crate::httplog::logged_agent(20));
+    let agent = AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .build()
+    });
     let headers = if url.contains("zcode.z.ai") {
         zai_billing_headers_with_mid(token, mid.map(str::to_string))
     } else {
@@ -470,6 +520,11 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                     .ok()
                     .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
                     .unwrap_or(0);
+                // bigmodel 风格的业务 401 走 HTTP 200 包装（令牌过期）——同样进冷却，
+                // 否则每轮额度刷新都白打一发
+                if biz_code == 401 {
+                    mark_cred_cooldown(token);
+                }
                 if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
                     crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
                 }
@@ -485,6 +540,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                 crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &body, t0.elapsed().as_millis()));
                 if let Ok(v) = serde_json::from_str::<Value>(&body) {
                     if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
+                        mark_cred_cooldown(token);
                         return Err(crate::i18n::tr("err.token.biz401"));
                     }
                 }
@@ -499,6 +555,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                     }
                 }
                 if code == 401 || code == 403 {
+                    mark_cred_cooldown(token);
                     return Err(crate::i18n::trf("err.token.http401", &[("code", &code.to_string())]));
                 }
                 let msg = serde_json::from_str::<Value>(&body)
@@ -513,48 +570,98 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
 
 type FetchFn<'a> = dyn Fn(&str, &str) -> Result<Value, String> + 'a;
 
-fn query_with_token_via(token: &str, fetch: &FetchFn) -> Result<QuotaOverview, String> {
-    let mut best_err: Option<String>;
+/// monitor 用量响应的业务错误归一：401 → token 失效，其余带码带 msg。
+fn monitor_biz_err(resp: &Value) -> String {
+    match resp.get("code").and_then(|c| c.as_i64()) {
+        Some(401) => crate::i18n::tr("err.token.biz401"),
+        Some(c) => {
+            let msg = ["msg", "message", "error"]
+                .iter()
+                .find_map(|k| resp.get(k).and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_default();
+            crate::i18n::trf("err.quota.biz", &[("code", &c.to_string()), ("msg", &msg)])
+        }
+        None => crate::i18n::tr("err.quota.bad_resp"),
+    }
+}
 
-    match fetch(QUOTA_LIMIT_URL, token) {
-        Ok(limit_resp) => {
-            if business_ok(&limit_resp) {
+fn query_with_token_via(token: &str, fetch: &FetchFn) -> Result<QuotaOverview, String> {
+    // billing/balance 先行（zcode 自家接口，token 在即必达）：与 query_channels_via
+    // 的 ZaiBilling 腿同语义——桶空即「无可用套餐」直接定论；bigmodel quota/limit
+    // 只在 balance 失败时兜底。无 coding plan 的号不再每轮白挨一发注定失败的
+    // monitor 探针（ 曾是首选，401/「不存在coding plan」长期刷屏）
+    let url = format!("{BILLING_BALANCE_URL}?app_version={}", zcode_app_version());
+    let mut best_err: Option<String> = match fetch(&url, token) {
+        Ok(balance) if business_ok(&balance) => {
+            let mut ov = normalize_balance(&balance);
+            ov.refreshed_at = chrono::Local::now().timestamp_millis();
+            ov.source = "zcode.z.ai/billing".into();
+            return Ok(if ov.plan_tier.is_some() || !ov.plans.is_empty() {
+                ov
+            } else {
+                no_plan_overview()
+            });
+        }
+        Ok(resp) => {
+            let msg = ["msg", "message", "error"]
+                .iter()
+                .find_map(|k| resp.get(k).and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_default();
+            let code = resp.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+            Some(crate::i18n::trf("err.quota.biz", &[("code", &code.to_string()), ("msg", &msg)]))
+        }
+        Err(e) => Some(e),
+    };
+
+    // bigmodel 兜底腿·订阅先行（2026-11-08）：subscription/list 定门——有在期 coding
+    // 套餐才打 monitor 用量；订阅空 = bigmodel 通道无套餐，直接定论；订阅业务 401 =
+    // 同 token 同 host，monitor 必然同样结局（401「令牌已过期」刷屏治理）。仅订阅
+    // 网络失败或非鉴权业务失败时保留 monitor 直打兜底（旧行为）。
+    match fetch(SUBSCRIPTION_URL, token) {
+        Ok(sub) if business_ok(&sub) => {
+            let has_sub = sub
+                .get("data")
+                .and_then(|d| d.as_array())
+                .is_some_and(|arr| arr.iter().any(is_active_coding_plan_entry));
+            if !has_sub {
+                return Ok(no_plan_overview());
+            }
+            match fetch(QUOTA_LIMIT_URL, token) {
+                Ok(limit_resp) if business_ok(&limit_resp) => {
+                    let mut ov = normalize_quota_limit(&limit_resp, Some(&sub));
+                    ov.refreshed_at = chrono::Local::now().timestamp_millis();
+                    ov.source = "bigmodel.cn/api/monitor".into();
+                    return Ok(ov);
+                }
+                Ok(limit_resp) => best_err = Some(monitor_biz_err(&limit_resp)),
+                Err(e) => {
+                    if best_err.is_none() {
+                        best_err = Some(e);
+                    }
+                }
+            }
+        }
+        Ok(sub)
+            if classify_biz_err(sub.get("code").and_then(|c| c.as_i64()).unwrap_or(0))
+                == BizErrFamily::Auth =>
+        {
+            best_err = Some(crate::i18n::tr("err.token.biz401"));
+        }
+        _ => match fetch(QUOTA_LIMIT_URL, token) {
+            Ok(limit_resp) if business_ok(&limit_resp) => {
                 let sub = fetch(SUBSCRIPTION_URL, token).ok();
                 let mut ov = normalize_quota_limit(&limit_resp, sub.as_ref());
                 ov.refreshed_at = chrono::Local::now().timestamp_millis();
                 ov.source = "bigmodel.cn/api/monitor".into();
                 return Ok(ov);
             }
-            let code = limit_resp.get("code").and_then(|c| c.as_i64());
-            best_err = Some(match code {
-                Some(401) => crate::i18n::tr("err.token.biz401"),
-                Some(c) => {
-                    let msg = ["msg", "message", "error"]
-                        .iter()
-                        .find_map(|k| limit_resp.get(k).and_then(|x| x.as_str()).map(String::from))
-                        .unwrap_or_default();
-                    crate::i18n::trf("err.quota.biz", &[("code", &c.to_string()), ("msg", &msg)])
+            Ok(limit_resp) => best_err = Some(monitor_biz_err(&limit_resp)),
+            Err(e) => {
+                if best_err.is_none() {
+                    best_err = Some(e);
                 }
-                None => crate::i18n::tr("err.quota.bad_resp"),
-            });
-        }
-        Err(e) => best_err = Some(e),
-    }
-
-    let url = format!("{BILLING_BALANCE_URL}?app_version={}", zcode_app_version());
-    match fetch(&url, token) {
-        Ok(balance) if business_ok(&balance) => {
-            let mut ov = normalize_balance(&balance);
-            ov.refreshed_at = chrono::Local::now().timestamp_millis();
-            ov.source = "zcode.z.ai/billing".into();
-            return Ok(ov);
-        }
-        Ok(_) => {}
-        Err(e) => {
-            if best_err.is_none() {
-                best_err = Some(e);
             }
-        }
+        },
     }
 
     Err(best_err.unwrap_or_else(|| crate::i18n::tr("err.quota.fail")))
@@ -755,33 +862,81 @@ fn query_channels_via(channels: &[Channel], fetch: &FetchFn) -> Result<QuotaOver
     let mut parts: Vec<QuotaOverview> = vec![];
     for ch in channels {
         match ch {
-            Channel::Monitor(key) => match fetch(QUOTA_LIMIT_URL, key) {
-                Ok(resp) => {
-                    if business_ok(&resp) {
-                        let sub = fetch(SUBSCRIPTION_URL, key).ok();
-                        let mut ov = normalize_quota_limit(&resp, sub.as_ref());
-                        ov.refreshed_at = chrono::Local::now().timestamp_millis();
-                        ov.source = "bigmodel.cn/api/monitor".into();
-                        parts.push(ov);
-                    } else {
-                        let msg = ["msg", "message", "error"]
-                            .iter()
-                            .find_map(|k| resp.get(k).and_then(|x| x.as_str()).map(String::from))
-                            .unwrap_or_default();
-                        if is_no_plan_message(&msg) {
+            Channel::Monitor(key) => {
+                // 订阅先行（与切换探针 classify_via 同语义，2026-11-08）：有在期 coding
+                // 套餐才打 monitor 用量；订阅空 = 无套餐定论；订阅业务 401 = 鉴权失败，
+                // monitor 不再白打；订阅网络失败才保留 monitor 直打兜底（旧行为）。
+                match fetch(SUBSCRIPTION_URL, key) {
+                    Ok(sub) if business_ok(&sub) => {
+                        let has_sub = sub
+                            .get("data")
+                            .and_then(|d| d.as_array())
+                            .is_some_and(|arr| arr.iter().any(is_active_coding_plan_entry));
+                        if has_sub {
+                            match fetch(QUOTA_LIMIT_URL, key) {
+                                Ok(resp) if business_ok(&resp) => {
+                                    let mut ov = normalize_quota_limit(&resp, Some(&sub));
+                                    ov.refreshed_at = chrono::Local::now().timestamp_millis();
+                                    ov.source = "bigmodel.cn/api/monitor".into();
+                                    parts.push(ov);
+                                }
+                                Ok(resp) => {
+                                    let msg = ["msg", "message", "error"]
+                                        .iter()
+                                        .find_map(|k| resp.get(k).and_then(|x| x.as_str()).map(String::from))
+                                        .unwrap_or_default();
+                                    if is_no_plan_message(&msg) {
+                                        saw_no_plan = true;
+                                    } else if best_err.is_none() {
+                                        best_err = Some(monitor_biz_err(&resp));
+                                    }
+                                }
+                                Err(e) => {
+                                    if best_err.is_none() {
+                                        best_err = Some(e);
+                                    }
+                                }
+                            }
+                        } else {
                             saw_no_plan = true;
-                        } else if best_err.is_none() {
-                            let code = resp.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-                            best_err = Some(crate::i18n::trf("err.quota.biz", &[("code", &code.to_string()), ("msg", &msg)]));
                         }
                     }
-                }
-                Err(e) => {
-                    if best_err.is_none() {
-                        best_err = Some(e);
+                    Ok(sub)
+                        if classify_biz_err(sub.get("code").and_then(|c| c.as_i64()).unwrap_or(0))
+                            == BizErrFamily::Auth =>
+                    {
+                        if best_err.is_none() {
+                            best_err = Some(crate::i18n::tr("err.token.biz401"));
+                        }
                     }
+                    _ => match fetch(QUOTA_LIMIT_URL, key) {
+                        Ok(resp) => {
+                            if business_ok(&resp) {
+                                let sub = fetch(SUBSCRIPTION_URL, key).ok();
+                                let mut ov = normalize_quota_limit(&resp, sub.as_ref());
+                                ov.refreshed_at = chrono::Local::now().timestamp_millis();
+                                ov.source = "bigmodel.cn/api/monitor".into();
+                                parts.push(ov);
+                            } else {
+                                let msg = ["msg", "message", "error"]
+                                    .iter()
+                                    .find_map(|k| resp.get(k).and_then(|x| x.as_str()).map(String::from))
+                                    .unwrap_or_default();
+                                if is_no_plan_message(&msg) {
+                                    saw_no_plan = true;
+                                } else if best_err.is_none() {
+                                    best_err = Some(monitor_biz_err(&resp));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if best_err.is_none() {
+                                best_err = Some(e);
+                            }
+                        }
+                    },
                 }
-            },
+            }
             Channel::ZaiBilling(tok) => {
                 let url = format!("{BILLING_BALANCE_URL}?app_version={}", zcode_app_version());
                 match fetch(&url, tok) {
@@ -1824,5 +1979,81 @@ mod tests {
         assert_eq!(slot.items.len(), 1);
         assert_eq!(slot.items[0].total, Some(123.0));
         assert_eq!(slot.items[0].remaining, Some(123.0));
+    }
+
+    /// bigmodel 兑底腿·订阅先行（2026-11-08）：balance 失败进兑底后，订阅为空
+    /// （无在期 coding 套餐）→ 直接定论无套餐，monitor 用量接口不得再打
+    #[test]
+    fn bigmodel_fallback_gated_by_subscription_empty() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::<String>::new());
+        let fetch = |url: &str, _t: &str| -> Result<Value, String> {
+            calls.borrow_mut().push(url.to_string());
+            if url.starts_with(BILLING_BALANCE_URL) {
+                Ok(json!({ "code": 1005, "msg": "quota exhausted" }))
+            } else if url == SUBSCRIPTION_URL {
+                Ok(json!({ "code": 0, "msg": "", "data": [] }))
+            } else if url == QUOTA_LIMIT_URL {
+                Ok(json!({ "code": 401, "msg": "令牌已过期或验证不正确", "success": false }))
+            } else {
+                Ok(json!({}))
+            }
+        };
+        let ov = query_with_token_via("t", &fetch).expect("订阅空应定论无套餐");
+        assert!(ov.is_empty && ov.source == "no_plan", "source={}", ov.source);
+        assert!(
+            !calls.borrow().iter().any(|u| u == QUOTA_LIMIT_URL),
+            "订阅为空不得打 monitor 用量接口"
+        );
+    }
+
+    /// 订阅有在期 coding 套餐 → 才打 monitor，且订阅响应复用做套餐名/到期增强
+    #[test]
+    fn bigmodel_monitor_probed_only_after_subscription_confirms() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::<String>::new());
+        let fetch = |url: &str, _t: &str| -> Result<Value, String> {
+            calls.borrow_mut().push(url.to_string());
+            if url.starts_with(BILLING_BALANCE_URL) {
+                Ok(json!({ "code": 1005, "msg": "quota exhausted" }))
+            } else if url == SUBSCRIPTION_URL {
+                Ok(json!({ "code": 0, "msg": "", "data": [{
+                    "productId": "glm-coding-plan", "productName": "glm coding plan",
+                    "inCurrentPeriod": true, "status": "VALID"
+                }] }))
+            } else if url == QUOTA_LIMIT_URL {
+                Ok(json!({ "code": 0, "msg": "", "data": { "level": "pro", "limits": [] } }))
+            } else {
+                Ok(json!({}))
+            }
+        };
+        let ov = query_with_token_via("t", &fetch).expect("有订阅应产出 monitor 概览");
+        assert_eq!(ov.source, "bigmodel.cn/api/monitor");
+        assert!(calls.borrow().iter().any(|u| u == QUOTA_LIMIT_URL));
+    }
+
+    /// 订阅业务 401（令牌已过期）→ 同 token 同 host，monitor 必然同样结局，不再白打
+    #[test]
+    fn bigmodel_fallback_auth401_short_circuits_monitor() {
+        use std::cell::RefCell;
+        let calls = RefCell::new(Vec::<String>::new());
+        let fetch = |url: &str, _t: &str| -> Result<Value, String> {
+            calls.borrow_mut().push(url.to_string());
+            if url.starts_with(BILLING_BALANCE_URL) {
+                Ok(json!({ "code": 1005, "msg": "quota exhausted" }))
+            } else if url == SUBSCRIPTION_URL {
+                Ok(json!({ "code": 401, "msg": "令牌已过期或验证不正确", "success": false }))
+            } else if url == QUOTA_LIMIT_URL {
+                Ok(json!({ "code": 0, "msg": "", "data": { "level": "pro", "limits": [] } }))
+            } else {
+                Ok(json!({}))
+            }
+        };
+        let err = query_with_token_via("t", &fetch).expect_err("订阅 401 应报 token 失效");
+        assert!(err.contains("401"), "err={err}");
+        assert!(
+            !calls.borrow().iter().any(|u| u == QUOTA_LIMIT_URL),
+            "订阅 401 后 monitor 不应再打"
+        );
     }
 }

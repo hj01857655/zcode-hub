@@ -162,6 +162,7 @@ HTTP 200，157ms，账号 ShannonYoung8131，token 取 `zcodejwttoken`（`enc:v1
 - 配套额度端点（同文件，均实测在用）：
   - `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit`（bigmodel 通道，`quota.rs:20`）
   - `GET https://open.bigmodel.cn/api/biz/subscription/list`（订阅列表，`quota.rs:21`）
+- **订阅先行闸门（2026-11-08）**：bigmodel 通道两处——`query_with_token_via` 兑底腿与 `query_channels_via` 的 Monitor 臂——均改为 `subscription/list` 先探：`data[]` 含在期 coding 套餐（`is_active_coding_plan_entry`）才打 `quota/limit` 用量；订阅空 → 直接定论「无套餐」（`no_plan_overview`）；订阅业务 401/1006（Auth 族）→ 直接报 `err.token.biz401`。仅订阅网络失败或非鉴权业务失败时保留 monitor 直打兑底（旧行为）。与切换探针 `probe.rs classify_via` 的 Monitor 通道判定语义一致——monitor 端点不再对无效凭据每轮白打（401「令牌已过期」刷屏治理）。
 
 ## 5. 可复现探针
 
