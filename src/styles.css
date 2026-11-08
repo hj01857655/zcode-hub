@@ -1828,14 +1828,22 @@ input:focus-visible,
 }
 .x-log-row.clickable { cursor: pointer; }
 .x-log-row.clickable:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
-/* 系统日志页行：flow 标签 / 事件名 / 详情三段网格（复用 x-log-list 容器） */
-.x-log-row.sl-row { grid-template-columns: 140px 76px 180px 1fr; }
+/* 系统日志页：纯文本日志流——行是连续文本（ts [flow] event detail 空格分隔），
+   无网格无列对齐无表头；默认单行省略，点击展开读全文，错误行整体标红 */
+.sl-line { font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sl-line.clickable { cursor: pointer; }
+.sl-line.clickable:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); border-radius: 4px; }
+.sl-line.sl-err { color: var(--red); }
 .sl-flow { color: var(--ink-dim); font-family: var(--mono); flex: none; }
-.sl-event { color: var(--ink); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sl-detail { color: var(--ink-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 错误类事件整行着色（事件名匹配 fail/timeout/corrupt/downgraded 等） */
-.x-log-row.sl-err .sl-event { color: var(--red); }
-.x-log-row.sl-err .sl-detail { color: var(--err-soft); }
+.sl-event { color: var(--ink); font-family: var(--mono); }
+.sl-detail { color: var(--ink-mute); }
 .x-log-ts { color: var(--ink-mute); }
 .x-log-ep { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-log-acct { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

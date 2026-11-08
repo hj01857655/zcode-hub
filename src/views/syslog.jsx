@@ -1,7 +1,8 @@
 // SysLog 页 — 系统日志：flowlog 尾部行（oauth/claim/switch/gateway/sys 五个流的运维事件，
 // 含 httplog 中间件自动记录的全部 zcode 上游接口调用摘要）。网关转发请求不在此——
-// 那是请求日志页的职责。骨架复用请求日志页（topbar/toolbar/x-log-list），数据源 syslog_tail 命令；
-// 行格式 `ts [flow] event detail`，按 [flow] 分组过滤、error 类事件着色。
+// 那是请求日志页的职责。视觉是纯文本日志流（.sl-line 连续文本行，无网格无统计卡），
+// 工具条/过滤/搜索复用请求日志页样式；数据源 syslog_tail 命令；
+// 行格式 `ts [flow] event detail`，按 [flow] 分组过滤、error 类事件整行标红。
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
@@ -79,11 +80,6 @@ export default function SysLogPage() {
     return v;
   }, [parsed, flowFilter, q]);
 
-  const errCount = useMemo(
-    () => parsed.filter((p) => isErrEvent(p.event)).length,
-    [parsed],
-  );
-
   const exportLog = () => {
     const body = parsed.map((p) => p.raw).join("\n");
     const blob = new Blob([body], { type: "text/plain" });
@@ -109,13 +105,6 @@ export default function SysLogPage() {
         <span className="tb-spacer" />
       </section>
       <section className="settings open">
-        <div className="x-ls-stats">
-          <div className="x-ls-group">
-            <span className="x-ls-group-label">{t("sl.groupEvents")}</span>
-            <div className="x-stat"><span className="x-stat-v">{parsed.length}</span><span className="x-stat-k">{t("xl.total")}</span></div>
-            <div className="x-stat"><span className="x-stat-v fail">{errCount}</span><span className="x-stat-k">{t("xl.fail")}</span></div>
-          </div>
-        </div>
         <div className="x-ls-filters">
           <input className="zcode-path x-ls-search" type="text" value={q}
             onChange={(e) => setQ(e.target.value)} placeholder={t("sl.searchPh")} />
@@ -135,20 +124,21 @@ export default function SysLogPage() {
   );
 }
 
-// 文本行折叠：行内单行摘要（sl-detail 由 CSS 单行截断），点击展开分块打全——
-// 请求元信息一行、resp 响应体 JSON 缩进格式化，各自独立成块（请求是行，响应也是行），
-// 不拼接不做视图切换。hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
+// 文本行 = 日志本体：无网格无列对齐，一行就是一条连续日志文本（ts [flow] event detail），
+// 错误行整体标红。默认单行省略，点击展开分块打全——meta 一行、resp 响应体 JSON 缩进
+// 格式化，各自独立成块；2K 级响应体只在展开视图读，列表保持日志流的滚动密度。
+// hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
   const { meta, body } = splitLine(p.detail || p.raw);
   return (
     <div className={"x-log-item" + (open ? " expanded" : "")}>
-      <div className={"x-log-row sl-row clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
+      <div className={"sl-line clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
         onClick={() => setOpen(!open)}>
         <span className="x-log-ts">{p.ts}</span>
-        <span className="sl-flow">[{p.flow}]</span>
-        <span className="sl-event">{p.event}</span>
-        <span className="sl-detail">{p.detail}</span>
+        {" "}<span className="sl-flow">[{p.flow}]</span>
+        {" "}<span className="sl-event">{p.event}</span>
+        {" "}<span className="sl-detail">{p.detail}</span>
       </div>
       {open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
