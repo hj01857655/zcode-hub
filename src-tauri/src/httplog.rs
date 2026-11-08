@@ -1,7 +1,8 @@
 //! HTTP 请求统一记录层：ureq 3.x Middleware 挂在共享 Agent 上，全仓 HTTP 调用
 //! （claim/touch/balance/oauth/token/referral 等全部 zcode 上游接口）自动落
-//! flowlog——URL/方法/请求体/状态/耗时/响应体（JSON 全量、非 JSON 截 2K，见
-//! resp_for_log），系统日志页可查。
+//! flowlog——JSONL 行（ts/flow/event + method/url/status/ms/body 五字段，见
+//! flowlog::log_http），body 恒为 wire 原文转义字符串（JSON 全量、非 JSON 截
+//! 2K，见 body_for_log），系统日志页可查。
 //!
 //! ureq 3.x 相比 2.x 的关键差异（本仓迁移决策的依据）：
 //! - middleware 收到 http::Request<SendBody>，请求体在链上可读（2.x 的 Request
@@ -26,17 +27,28 @@ use ureq::{Body, SendBody};
 
 use crate::flowlog;
 
-/// 响应体落行策略：JSON 全量（展开视图要看完整结构，不截断）；非 JSON（WAF
-/// 拦截页 HTML 等可达数百 KB）截 2K 控日志体量——那类体本无结构可展开
+/// body 落行策略：JSON 全量（展开视图要看完整结构，不截断）；非 JSON（WAF
+/// 拦截页 HTML 等可达数百 KB）截 2K 控日志体量——那类体本无结构可展开。
+/// 先看首字符快速分路，JSON 形态才 parse（HTML 大体免一次必然失败的解析）。
+/// JSON 也封 64K 上限：单行超过 256KB 轮转阈值会让轮转连续触发、日志互相
+/// 覆盖；超限 JSON 截断后 parse 失败，前端退化原文展示（可接受）。
 const PLAIN_CAP: usize = 2048;
+const JSON_CAP: usize = 64 * 1024;
 
-fn resp_for_log(body: &str) -> &str {
-    if serde_json::from_str::<serde_json::Value>(body.trim()).is_ok() {
-        body
-    } else {
-        let n = body.trim().char_indices().nth(PLAIN_CAP).map(|(i, _)| i).unwrap_or(body.trim().len());
-        &body.trim()[..n]
+pub(crate) fn body_for_log(body: &str) -> &str {
+    let t = body.trim();
+    if t.starts_with('{') || t.starts_with('[') {
+        if serde_json::from_str::<serde_json::Value>(t).is_ok() {
+            if body.len() <= JSON_CAP {
+                return body;
+            }
+            // 超限 JSON 按字符边界截（read_to_string 产物是合法 UTF-8，char_indices 落点必在边界）
+            let n = body.char_indices().nth(JSON_CAP).map(|(i, _)| i).unwrap_or(body.len());
+            return &body[..n];
+        }
     }
+    let n = t.char_indices().nth(PLAIN_CAP).map(|(i, _)| i).unwrap_or(t.len());
+    &t[..n]
 }
 
 /// URL 缩短为 host+path（域名重复无信息量；query 保留：seq/platform 等动态参数
@@ -57,20 +69,18 @@ fn flow_of(url: &str) -> &'static str {
     }
 }
 
-/// Kiro 式结果行：「{method} {path} → status ms resp」——请求标识 + 箭头结果 +
-/// 内联响应体（截 2K），一行独立可读；请求体行（http-req）在中间件请求侧落，
-/// req 与 resp 永不混行。
+/// 结果行：JSONL 结构化字段（method/url/status/ms/body），body 走 body_for_log
+/// 截断策略；请求行（http-req）同走 flowlog::log_http，无 status/ms。
 fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
     let event = if (200..300).contains(&status) { "http-ok" } else { "http-err" };
-    // JSON 全量 / 非 JSON 截 2K（策略见 resp_for_log）
-    flowlog::log(
+    flowlog::log_http(
         flow,
         event,
-        &format!(
-            "{method} {} → {status} ms={elapsed_ms} resp={}",
-            short_url(url),
-            resp_for_log(body)
-        ),
+        method,
+        &short_url(url),
+        Some(status),
+        Some(elapsed_ms.min(u64::MAX as u128) as u64),
+        Some(body_for_log(body)),
     );
 }
 
@@ -92,10 +102,14 @@ impl Middleware for HttpLogMw {
         let mut buf = Vec::new();
         body.into_reader().read_to_end(&mut buf).map_err(ureq::Error::from)?;
         if !buf.is_empty() {
-            flowlog::log(
+            flowlog::log_http(
                 flow,
                 "http-req",
-                &format!("{method} {} req={}", short_url(&url), String::from_utf8_lossy(&buf)),
+                &method,
+                &short_url(&url),
+                None,
+                None,
+                Some(body_for_log(&String::from_utf8_lossy(&buf))),
             );
         }
         let send_body = if buf.is_empty() {
@@ -123,14 +137,14 @@ impl Middleware for HttpLogMw {
                     }
                     Err(e) => {
                         // 读失败（>10MB limit / 连接中断）：记错误行，调用方按网络错处理
-                        flowlog::log(
+                        flowlog::log_http(
                             flow,
                             "http-err",
-                            &format!(
-                                "{method} {} → {status} ms={} resp read failed: {e}",
-                                short_url(&url),
-                                t0.elapsed().as_millis()
-                            ),
+                            &method,
+                            &short_url(&url),
+                            Some(status),
+                            Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                            Some(&format!("resp read failed: {e}")),
                         );
                         Err(ureq::Error::from(e))
                     }
@@ -323,9 +337,21 @@ mod tests {
         assert_eq!(body_of(&raw_req), "{\n  \"a\": 1\n}", "json payload lost:\n{raw_req}");
 
         let log = std::fs::read_to_string(dir.join("logs").join("oauth.log")).unwrap();
-        let sys_flow = log.lines().filter(|l| l.contains("[sys]")).collect::<Vec<_>>().join("\n");
-        assert!(sys_flow.contains("http-req") && sys_flow.contains("req="), "http-req line missing:\n{sys_flow}");
-        assert!(sys_flow.contains("http-ok") && sys_flow.contains("resp="), "http-ok line missing:\n{sys_flow}");
+        // JSONL 契约：落盘每行都是合法 JSON 且 flow 字段正确
+        let sys_flow = log
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("non-JSONL line"))
+            .filter(|v| v["flow"] == "sys")
+            .collect::<Vec<_>>();
+        let req_line = sys_flow.iter().find(|v| v["event"] == "http-req").expect("http-req line missing");
+        assert_eq!(req_line["method"], "POST");
+        assert!(req_line["body"].as_str().unwrap().contains("\"a\": 1"), "req body lost: {req_line}");
+        let ok_line = sys_flow.iter().find(|v| v["event"] == "http-ok").expect("http-ok line missing");
+        assert_eq!(ok_line["status"], 200);
+        assert!(ok_line["ms"].is_u64());
+        assert!(ok_line["body"].as_str().unwrap().contains("\"code\":0"), "resp body lost: {ok_line}");
+        // 请求/响应行互斥字段：req 行无 status/ms，resp 行齐备
+        assert!(req_line.get("status").is_none() && req_line.get("ms").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
