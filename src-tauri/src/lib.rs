@@ -1852,7 +1852,8 @@ async fn gateway_log_history() -> Result<Vec<serde_json::Value>, String> {
 /// 系统日志：flowlog 尾部行（oauth/claim/switch/gateway/sys 五个流的运维事件，
 /// 含 httplog 中间件自动记录的全部 zcode 上游接口调用）。网关转发请求不在此——
 /// 那是请求日志页（gateway_log_history）的职责，系统日志只做运维/诊断事件流。
-/// 行格式 `ts [flow] event detail`，前端按 [flow] 分组过滤与着色。
+/// 行格式 JSONL（ts/flow/event + detail 或 method/url/status/ms/body），前端按
+/// JSON.parse 解析、按 flow 分组过滤着色。
 #[tauri::command]
 async fn syslog_tail(n: Option<u32>) -> Result<Vec<String>, String> {
     let n = n.unwrap_or(500).clamp(1, 2000) as usize;

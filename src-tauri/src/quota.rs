@@ -407,38 +407,6 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
     tokens
 }
 
-/// flowlog 诊断摘要行：URL 缩短为路径（域名固定不必重复）、HTTP 状态、业务码、
-/// 耗时、响应体截 2K。每次 http_get_json 调用写一行——balance/claim/touch 等
-/// app 内部上游 API 的请求级排障数据源（3012/风控/限流可追溯）。
-///
-/// 频度治理：http-ok 行只在「响应体非空且业务码异常」时落（阈值写法见下），
-/// balance/subscription 这类周期性轮询的成功响应静默——每号每轮 2-3 行的
-/// 常态成功行会把错误行淹掉，诊断价值反而下降。错误行（http-err）全量保留。
-/// 诊断结果行（Kiro 结果行形态）：「GET {path} → status code ms resp」——接口
-/// 标识 + 箭头结果 + 内联响应体（截 2K），一行独立可读；path 剥 scheme 与 query。
-fn http_diag_line(url: &str, status: u16, body: &str, elapsed_ms: u128) -> String {
-    let path = url
-        .split_once("?")
-        .map_or(url, |(base, _)| base)
-        .split("://")
-        .last()
-        .unwrap_or(url)
-        .to_string();
-    let code = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
-        .unwrap_or(-1);
-    let clip = |s: &str, cap: usize| {
-        if s.chars().count() <= cap {
-            s.to_string()
-        } else {
-            let head: String = s.chars().take(cap).collect();
-            format!("{head}…[共 {} 字符]", s.chars().count())
-        }
-    };
-    format!("GET {path} → {status} code={code} ms={elapsed_ms} resp={}", clip(body, 2048))
-}
-
 /// 凭据冷却表：HTTP 401/403 或业务 401 的凭据记 15 分钟冷却，期间 http_get_json
 /// 直接 Err 不发请求——过期令牌不再参与每轮额度轮询（对齐 claim 侧 touch 429
 /// 退避的思路）。指纹用凭据哈希不落明文；冷却到期自动移除，换号重登自然生效。
@@ -486,8 +454,8 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
     }
     let retry_delays = [500u64, 1500, 4000];
     // quota 读取链自建裸 Agent（不挂 httplog middleware）：每响应只落本函数的
-    // 诊断行一行（http-ok-biz/http-err + http_diag_line），避免与 middleware 行
-    // 同响应双行刷屏；连接池独立对低频轮询无影响。http_status_as_error(false)
+    // 诊断行一行（http-ok-biz/http-err），避免与 middleware 行同响应双行刷屏；
+    // 连接池独立对低频轮询无影响。http_status_as_error(false)
     // 与 httplog Agent 同语义：4xx/5xx 走 Ok(resp) 的 body 分流，Err 只剩网络层
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     let agent = AGENT.get_or_init(|| {
@@ -516,8 +484,17 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
         if (400..600).contains(&status) {
             // HTTP 层 4xx/5xx：诊断行 + 业务 401（body code）→ 冷却、429 → 退避重试、
-            // 401/403 → 冷却，其余按响应 msg 报错
-            crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &text, t0.elapsed().as_millis()));
+            // 401/403 → 冷却，其余按响应 msg 报错。JSONL 诊断行走结构化 API，
+            // 与 httplog middleware 行同 schema（body 截断策略同 body_for_log）
+            crate::flowlog::log_http(
+                "sys",
+                "http-err",
+                "GET",
+                url,
+                Some(status),
+                Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                Some(crate::httplog::body_for_log(&text)),
+            );
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
                     mark_cred_cooldown(token);
@@ -556,7 +533,15 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             mark_cred_cooldown(token);
         }
         if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
-            crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status, &text, t0.elapsed().as_millis()));
+            crate::flowlog::log_http(
+                "sys",
+                "http-ok-biz",
+                "GET",
+                url,
+                Some(status),
+                Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                Some(crate::httplog::body_for_log(&text)),
+            );
         }
         return Ok(if text.is_empty() {
             Value::Null
