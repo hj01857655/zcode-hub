@@ -8,6 +8,12 @@ import { Ic } from "../components/iconsx.jsx";
 import { GatewayTestModal } from "../components/gateway-test.jsx";
 import { useVisiblePolling } from "../lib/pageVisible.js";
 
+// 三种协议客户端要填的 base URL 不同：Chat/Responses 带 /v1（客户端追加
+// /chat/completions、/responses），Anthropic 不带 /v1（客户端自己追加 /v1/messages）。
+// 输入框随协议 tab 切换，Anthropic 下填 /v1 会拼出 /v1/v1/messages。
+const protocolBase = (port, proto) =>
+  `http://127.0.0.1:${port}${proto === "messages" ? "" : "/v1"}`;
+
 // 端点输入即配置：host 固定本机，端口从 URL 解析（省略端口 = 默认 8081）；解析失败返回 null
 const parseEndpoint = (s) => {
   try {
@@ -28,6 +34,13 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   // 测试请求弹窗：选模型、填消息、发真请求、看结果（自包含组件 gateway-test.jsx）；历史留痕可回看
   const [testOpen, setTestOpen] = useState(false);
   const [accProto, setAccProto] = useState("chat");
+  // 2s 轮询的 refresh 闭包是挂载时那一份（deps=[]），读不到新 accProto；
+  // 用 ref 让回填始终按当前协议算 base，否则轮询会把 Messages 的根地址盖回 /v1
+  const accProtoRef = useRef(accProto);
+  useEffect(() => {
+    accProtoRef.current = accProto;
+    if (!epTouched.current) setEndpointInput(protocolBase(status?.port ?? 8081, accProto));
+  }, [accProto]);
   const [copiedEx, setCopiedEx] = useState(false);
   const [connectInput, setConnectInput] = useState("");
   const [retriesInput, setRetriesInput] = useState("");
@@ -53,7 +66,18 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const [copiedEp, setCopiedEp] = useState(false);
   // 供应商条目（magpie 式）：展开看上游/模型面，获取模型 + 右键测试
   const [provBusy, setProvBusy] = useState(false);
-  const [provResult, setProvResult] = useState(null);
+  // 测试结果弹窗：{ ok, status, ms, error, model, account }，null=关闭
+  const [testResult, setTestResult] = useState(null);
+  // 获取模型结果：{ models, cached, at }——只弹 toast 会把清单丢掉，落进 state
+  // 常驻展示（清单/来源/时刻）。未点过「获取模型」时回退到 status.models
+  // （gateway_status 与 /v1/models 同源），不必等用户先点一次才能右键测
+  const [provModels, setProvModels] = useState(null);
+  const shownModels = provModels ?? (status?.models?.length
+    ? { models: status.models, src: null, at: null }
+    : null);
+  const [copiedModels, setCopiedModels] = useState(false);
+  // 运行时保存落盘后服务仍用启动时快照，给一条明确提示而不是静默失败
+  const [savedRestart, setSavedRestart] = useState(false);
 
   const copyEndpoint = async () => {
     try { await navigator.clipboard.writeText(endpointInput); setCopiedEp(true); setTimeout(() => setCopiedEp(false), 1200); } catch { /* noop */ }
@@ -81,9 +105,10 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     try {
       const s = await invoke("gateway_status");
       setStatus(s);
+      setErr("");
       // 用户没动过输入框时跟随盘上真值（启动/换号后 key 会变）
       if (!keyTouched.current) setApiKey(s?.apiKey || "");
-      if (!epTouched.current) setEndpointInput(`http://127.0.0.1:${s?.port ?? 8081}/v1`);
+      if (!epTouched.current) setEndpointInput(protocolBase(s?.port ?? 8081, accProtoRef.current));
       // 配置对话框打开期间不回填任何调优输入：清空/编辑途中被 2s 轮询覆盖是打断
       if (!tuneOpenRef.current) {
         setConnectInput((v) => v || String(s?.upstreamConnectSecs ?? ""));
@@ -107,9 +132,22 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   // （状态/池健康只在前台有意义，隐藏后全速轮询白打 IPC）
   useVisiblePolling(refresh, 2000, 30000, []);
   useEffect(() => { tuneOpenRef.current = tuneOpen; }, [tuneOpen]);
-  // 协议 tab 左右邻居切换（Alt+←/→，循环）：只管调用示例的 Chat/Responses/Messages；
-  // 测试弹窗的协议切换由 GatewayTestModal 自己监听（open 时才挂）
+  // 弹窗统一 Esc 关闭：最上层优先（测试结果 > 调优 > 通道测试），一次只关一个
   useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (testResult) { setTestResult(null); return; }
+      if (tuneOpen) { setTuneOpen(false); return; }
+      if (testOpen) setTestOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [testResult, tuneOpen, testOpen]);
+  // 协议 tab 左右邻居切换（Alt+←/→，循环）：只管调用示例的 Chat/Responses/Messages；
+  // 测试弹窗的协议切换由 GatewayTestModal 自己监听（open 时才挂）——这里必须让出，
+  // 否则弹窗开着按一次会同时切页面 tab 和弹窗 tab
+  useEffect(() => {
+    if (testOpen) return undefined;
     const onKey = (e) => {
       if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
       e.preventDefault();
@@ -119,15 +157,17 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [accProto]);
+  }, [accProto, testOpen]);
 
   const running = status?.running ?? false;
-  // 网关重启检测（running false→true）：上次供应商测试结果对应的是旧进程，
+  // 网关重启检测（running false→true）：上次模型测试结果对应的是旧进程，
   // 重启后上游状态可能已变，清掉避免展示陈旧结论
   const prevRunning = useRef(null);
   useEffect(() => {
-    if (prevRunning.current === false && running) setProvResult(null);
+    if (prevRunning.current === false && running) setTestResult(null);
     prevRunning.current = running;
+    // 用户手动启停后配置已重新加载，不再挂「待重启」横幅
+    if (!running) setSavedRestart(false);
   }, [running]);
   // 端点输入解析出的端口与盘上不一致 = 待保存；解析失败不给保存
   const parsedPort = parseEndpoint(endpointInput);
@@ -146,9 +186,12 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     String(status.keepaliveSecs ?? "") !== keepaliveInput.trim() ||
     String(status.totalTimeoutSecs ?? "") !== timeoutInput.trim()
   );
-  const guard = async (fn) => {
+  // busy 是全局闸门；供应商动作额外用 provBusy 钉住自己的按钮/右键/重测，
+  // 避免测试弹窗开着时连点发出多条上游请求
+  const guard = async (fn, providerAction = false) => {
     if (busy) return;
     setBusy(true);
+    if (providerAction) setProvBusy(true);
     setErr("");
     try {
       await fn();
@@ -156,6 +199,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
       toast(stripErr(e), "err");
     } finally {
       setBusy(false);
+      if (providerAction) setProvBusy(false);
       refresh();
     }
   };
@@ -167,11 +211,17 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const doSaveBase = () => guard(async () => {
     const p = parseEndpoint(endpointInput);
     if (p == null) throw new Error(t("x.badPort"));
-    await invoke("gateway_start", { port: p, apiKey: apiKey.trim() || null });
+    // 后端忽略空串（且空 key = 拒绝所有请求），留空保存会静默失败：
+    // 界面显示已保存、盘上还是旧值，必须先拦住
+    const key = apiKey.trim();
+    if (!key) throw new Error(t("x.keyNotEmpty"));
+    await invoke("gateway_start", { port: p, apiKey: key });
     keyTouched.current = false;
     epTouched.current = false;
-    setEndpointInput(`http://127.0.0.1:${p}/v1`);
-    setApiKey(status?.apiKey || apiKey.trim());
+    setEndpointInput(protocolBase(p, accProto));
+    // 回填用本次提交的值：status 还是保存前的快照，回读它会把刚提交的新 key 丢掉
+    setApiKey(key);
+    if (running) setSavedRestart(true);
   });
   // 配置对话框保存：只写调优项，端口/密钥传 null 沿用盘上值
   const doSaveTune = () => guard(async () => {
@@ -196,9 +246,15 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
       totalTimeoutSecs: Number.isFinite(parseInt(timeoutInput.trim(), 10)) ? Math.max(0, parseInt(timeoutInput.trim(), 10)) : null,
     });
     setTuneOpen(false);
+    if (running) setSavedRestart(true);
   });
   const doStop = () => guard(async () => {
     await invoke("gateway_stop");
+  });
+  const doRestart = () => guard(async () => {
+    await invoke("gateway_stop");
+    await invoke("gateway_start", { port: null, apiKey: null });
+    setSavedRestart(false);
   });
 
   const endpoint = `http://127.0.0.1:${status?.port ?? 8081}/v1`;
@@ -235,20 +291,26 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   // 供应商动作（magpie 式）：获取模型（回缓存/拉取）+ 右键测试（tiny 请求，独立直连不碰池）
   const doFetchModels = () => guard(async () => {
     const r = await invoke("provider_fetch_models", { providerId: "zcode" });
+    const list = Array.isArray(r.models) ? r.models : [];
+    setProvModels({ models: list, src: !!r.cached ? "cached" : "live", at: new Date() });
     await refresh();
-    toast(t("x.fetchedModels", { n: (r.models || []).length }));
-  });
-  const doProvTest = () => guard(async () => {
-    setProvResult({ testing: true });
-    try {
-      const r = await invoke("provider_test", { providerId: "zcode", accountId: null });
-      setProvResult(r);
-    } catch (e) {
-      // 测试失败：条目行 tag 换成失败态（不然挂在「测试中…」不可恢复），错误全文交 guard toast
-      setProvResult({ ok: false, status: null, error: stripErr(e) });
-      throw e;
-    }
-  });
+    toast(t("x.fetchedModels", { n: list.length }));
+  }, true);
+  const copyFetchedModels = async () => {
+    const txt = (shownModels?.models || []).join("\n");
+    if (!txt) return;
+    try { await navigator.clipboard.writeText(txt); } catch { /* noop */ }
+    setCopiedModels(true);
+    setTimeout(() => setCopiedModels(false), 1200);
+  };
+  // 测试指定模型：右键某个模型 chip 时传该模型名；工具栏按钮测清单首个。
+  // 结果弹窗展示完整字段（状态/耗时/账号/错误全文），不再挤进行内小标签靠 hover 读
+  const doProvTest = (model) => guard(async () => {
+    const r = await invoke("provider_test", {
+      providerId: "zcode", accountId: null, model: model || null,
+    });
+    setTestResult(r);
+  }, true);
 
   return (
     <>
@@ -274,6 +336,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         <span className="tb-spacer" />
       </section>
       <section className="settings open gw-page">
+        {err ? <div className="hint" style={{ color: "var(--red)", marginBottom: 10 }}>{err}</div> : null}
         {/* 协议选择置顶：决定调用示例与接入形态，先选协议再看端点/密钥。
             不带 x-proto-seg（那是测试弹窗的面板内全宽形态）；fit-content 收住胶囊，
             块级 div 默认占满行宽会让三颗小按钮拖着一条整行空胶囊 */}
@@ -286,12 +349,12 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         <div className="path-line">
           <input className="zcode-path" type="text" value={endpointInput}
             onChange={(e) => { epTouched.current = true; setEndpointInput(e.target.value); }}
-            placeholder="http://127.0.0.1:8081/v1" />
+            placeholder={protocolBase(status?.port ?? 8081, accProto)} />
           <button className="btn-ghost has-ic" title={t("x.copyEndpoint")} onClick={copyEndpoint}>
             <Ic name={copiedEp ? "check" : "copy"} size={14} />
           </button>
           {portDirty
-            ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
+            ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
         </div>
 
@@ -310,10 +373,18 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
               </button>
             : null}
           {keyDirty
-            ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
+            ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
         </div>
         {running && (keyDirty || portDirty) ? <div className="hint">{t("x.cfgRunningHint")}</div> : null}
+        {savedRestart
+          ? <div className="x-restart-bar">
+              <span>{t("x.savedRestartHint")}</span>
+              <button className="btn-primary" disabled={busy} onClick={doRestart}>
+                <Ic name="refresh" size={13} /> {t("x.restart")}
+              </button>
+            </div>
+          : null}
 
         <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>
         <pre className="x-curl">{accessCurl}</pre>
@@ -321,9 +392,9 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
           <button className="btn-ghost has-ic" title={copiedEx ? t("x.copied") : t("x.copyBtn")} onClick={copyExample}>
             <Ic name={copiedEx ? "check" : "copy"} size={14} />
           </button>
-          {err ? <span className="hint" style={{ color: "var(--red)" }}>{err}</span> : null}
         </div>
         <div className="hint">{t("x.endpointDesc")}</div>
+        {accProto === "messages" ? <div className="hint">{t("x.endpointAnthropicNote")}</div> : null}
 
         {/* 账号池：一行摘要条，点击跳账号管理页定位；明细在账号页看，不在主页堆 */}
         <label style={{ marginTop: 14 }}>{t("x.poolLabel")}</label>
@@ -356,33 +427,86 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
             </>
           : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.poolEmpty")}</span></div>}
 
-        {/* 供应商条目：测试/获取模型按钮常驻行内，右键仍测试。行本身无左键动作——
-            恢复默认光标避免 pointer 误导（x-pool-line 类自带 pointer 是给可点卡条的） */}
-        <div
-          className="x-pool-line"
-          style={{ marginTop: 14, cursor: "default" }}
-          onContextMenu={(e) => { e.preventDefault(); if (!provBusy) doProvTest(); }}
-        >
+        {/* 供应商条目：只做「获取模型」与「测首个模型」两个显式动作；模型级测试
+            在下方每个模型 chip 上右键触发，结果走弹窗。行本身无右键动作。 */}
+        <div className="x-pool-line" style={{ marginTop: 14, cursor: "default" }}>
           <Ic name="sliders" size={14} />
           <span>ZCode · zcode.z.ai</span>
-          {provBusy
-            ? <span className="x-pool-tag">{t("x.provTesting")}</span>
-            : provResult && !provResult.testing
-              ? provResult.ok
-                ? <span className="x-pool-tag ok">{t("x.provOk", { ms: provResult.ms })}</span>
-                : <span className="x-pool-tag warn" title={String(provResult.error || "")}>
-                    {t("x.provFail", { status: provResult.status ?? "—", error: String(provResult.error || "").slice(0, 24) })}
-                  </span>
-              : null}
+          {provBusy ? <span className="x-pool-tag">{t("x.provTesting")}</span> : null}
           <span className="tb-spacer" />
           <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
             <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
           </button>
-          <button className="btn-ghost" disabled={provBusy} onClick={doProvTest} title={t("x.provTest")}>
+          <button className="btn-ghost" disabled={provBusy || !shownModels?.models?.length}
+            onClick={() => doProvTest(shownModels?.models?.[0])} title={t("x.provTestFirst")}>
             <Ic name="bolt" size={13} /> {t("x.provTest")}
           </button>
         </div>
+        {/* 获取模型结果：清单常驻可见（toast 只是一瞬），标来源/时刻，一键复制整表 */}
+        {shownModels
+          ? <div className="x-prov-models">
+              <div className="x-prov-models-head">
+                <span className="x-prov-models-title">
+                  {t("x.modelsAvail")} · {shownModels.models.length}
+                  {shownModels.src
+                    ? <span className={"x-prov-src " + shownModels.src}>
+                        {t(shownModels.src === "cached" ? "x.modelsFromCache" : "x.modelsFromUpstream")}
+                      </span>
+                    : null}
+                  {shownModels.at ? <span className="x-prov-at">{shownModels.at.toLocaleTimeString()}</span> : null}
+                </span>
+                <button className="btn-ghost has-ic" onClick={copyFetchedModels} title={t("x.copyBtn")}>
+                  <Ic name={copiedModels ? "check" : "copy"} size={13} />
+                </button>
+              </div>
+              {shownModels.models.length
+                ? <>
+                    <div className="x-prov-models-list">
+                      {shownModels.models.map((m) => (
+                        <span className="x-prov-model" key={m} title={t("x.modelTestHint")}
+                          onContextMenu={(e) => { e.preventDefault(); if (!provBusy) doProvTest(m); }}>
+                          {m}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="hint">{t("x.modelTestHint")}</div>
+                  </>
+                : <div className="hint">{t("x.modelsNone")}</div>}
+            </div>
+          : null}
       </section>
+
+      {/* 模型测试结果弹窗：完整字段常驻可读，不再挤进行内小标签靠 hover 读错误全文 */}
+      {testResult
+        ? <div className="pv-mask" onClick={() => setTestResult(null)}>
+            <div className="pv-panel x-test-result" onClick={(e) => e.stopPropagation()}>
+              <div className="pv-title">
+                <span className={"x-test-result-dot " + (testResult.ok ? "ok" : "bad")} />
+                {t(testResult.ok ? "x.testResultOk" : "x.testResultFail")}
+              </div>
+              <div className="pv-sub">{t("x.testResultSub")}</div>
+              <div className="x-test-result-grid">
+                <span>{t("x.testResultModel")}</span><code>{String(testResult.model ?? "—")}</code>
+                <span>{t("x.testResultStatus")}</span><code>{testResult.status ?? "—"}</code>
+                <span>{t("x.testResultMs")}</span><code>{testResult.ms ?? "—"} ms</code>
+                <span>{t("x.testResultAccount")}</span><code>{String(testResult.account ?? "—")}</code>
+              </div>
+              {testResult.error
+                ? <div className="x-test-result-err">
+                    <div className="x-test-result-err-head">{t("x.testResultError")}</div>
+                    <pre>{String(testResult.error)}</pre>
+                  </div>
+                : null}
+              <div className="x-test-result-actions">
+                <button className="btn-ghost has-ic" onClick={() => setTestResult(null)}>{t("common.close")}</button>
+                <button className="btn-primary has-ic" disabled={provBusy}
+                  onClick={() => doProvTest(testResult.model)}>
+                  <Ic name="refresh" size={13} /> {provBusy ? t("x.provTesting") : t("x.provTest")}
+                </button>
+              </div>
+            </div>
+          </div>
+        : null}
 
       {tuneOpen
         ? <div className="pv-mask" onClick={() => setTuneOpen(false)}>
@@ -461,7 +585,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
               </div>
               <div className="pv-actions">
                 <button className="btn-ghost" onClick={() => setTuneOpen(false)}>{t("common.cancel")}</button>
-                <button className="btn-primary" disabled={!tuneDirty || busy} onClick={() => guard(doSaveTune)}>
+                <button className="btn-primary" disabled={!tuneDirty || busy} onClick={doSaveTune}>
                   {t("common.save")}
                 </button>
               </div>
@@ -471,7 +595,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
 
       {/* 测试弹窗：状态与请求逻辑自包含（模型下拉 / stream 开关 / SSE / 历史），组件内处理 Alt+←/→ */}
       <GatewayTestModal open={testOpen} onClose={() => setTestOpen(false)}
-        status={status} running={running} guard={guard} endpoint={endpoint} apiKey={apiKey} />
+        status={status} running={running} guard={guard} endpoint={endpoint} apiKey={status?.apiKey || ""} />
     </>
   );
 }

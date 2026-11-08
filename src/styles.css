@@ -1772,6 +1772,135 @@ input:focus-visible,
 .x-pool-more:hover { color: var(--ink); }
 /* 池行号名可点击（跳账号管理定位）+ 账号卡定位闪灯 */
 .x-pool-name.link { cursor: pointer; }
+/* 供应商获取模型结果：toast 一瞬即逝，清单常驻可见（来源/时刻/复制） */
+.x-prov-models {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+.x-prov-models-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.x-prov-models-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.x-prov-src {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  background: color-mix(in srgb, var(--mint) 16%, transparent);
+  color: var(--mint);
+}
+.x-prov-src.cached {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--ink-mute);
+}
+.x-prov-at {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+}
+.x-prov-models-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.x-prov-model {
+  padding: 2px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  user-select: text;
+  cursor: context-menu;
+}
+.x-prov-model:hover {
+  border-color: color-mix(in srgb, var(--mint) 55%, transparent);
+  color: var(--mint);
+}
+/* 模型测试结果弹窗：字段常驻可读，错误全文可滚动选择，不靠 hover */
+.x-test-result { width: min(460px, calc(100vw - 48px)); }
+.x-test-result .pv-title { display: flex; align-items: center; gap: 9px; }
+.x-test-result-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.x-test-result-dot.ok {
+  background: var(--mint);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint) 18%, transparent);
+}
+.x-test-result-dot.bad {
+  background: var(--red);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent);
+}
+.x-test-result-grid {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 6px;
+  background: var(--bg-2);
+  font-size: 12px;
+}
+.x-test-result-grid > span { color: var(--ink-mute); }
+.x-test-result-grid > code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.x-test-result-err { margin-top: 12px; }
+.x-test-result-err-head { font-size: 11.5px; color: var(--red); margin-bottom: 6px; }
+.x-test-result-err pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 180px;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.x-test-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+/* 运行时保存后的待重启提示：配置已落盘但 serve() 用启动时快照，必须给可操作出口 */
+.x-restart-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  font-size: 12px;
+  color: var(--ink);
+}
 .x-pool-name.link:hover { color: var(--mint); text-decoration: underline; }
 .acc-flash { animation: accFlash 1.6s ease; border-radius: 10px; }
 @keyframes accFlash {

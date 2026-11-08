@@ -1715,6 +1715,8 @@ async fn gateway_start(
     {
         let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
         if let Some(p) = port { cfg.port = p; }
+        // 空 key 一律忽略：鉴权是 fail-closed（server.rs check_auth 空值拒绝所有请求），
+        // 允许清空等于静默把网关变成不可用。前端 doSaveBase 也拦空串，两处保持一致
         if let Some(k) = api_key { if !k.trim().is_empty() { cfg.api_key = k.trim().to_string(); } }
         if let Some(v) = upstream_connect_secs { if v > 0 { cfg.upstream_connect_secs = v; } }
         if let Some(v) = max_retries { cfg.max_retries = v; }
@@ -1804,14 +1806,16 @@ async fn provider_fetch_models(provider_id: String) -> Result<serde_json::Value,
     gateway::provider::fetch_models(&provider_id).await
 }
 
-/// 供应商页动作：右键测试——tiny 请求（8 token），返回 {ok, status, ms, error, model}；
-/// zcode 上游可指定账号单测（account_id），测试完全绕开池轮转/熔断
+/// 供应商页动作：模型右键测试——tiny 请求（8 token），返回 {ok, status, ms, error, model}；
+/// zcode 上游可指定账号单测（account_id），model 指定被测模型（右键某个模型 chip
+/// 时传入），测试完全绕开池轮转/熔断
 #[tauri::command]
 async fn provider_test(
     provider_id: String,
     account_id: Option<String>,
+    model: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    gateway::provider::test_provider(&provider_id, account_id).await
+    gateway::provider::test_provider(&provider_id, account_id, model.as_deref()).await
 }
 
 /// 日志历史：读 gateway.jsonl 尾部（独立日志页用，全量而非内存环 200 条）

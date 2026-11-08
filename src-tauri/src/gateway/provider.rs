@@ -17,6 +17,12 @@ fn err_body(body: &str) -> String {
     body.chars().take(120).collect::<String>()
 }
 
+// 测试结果的错误体要在弹窗里全文可读，不能复用 fetch_models 那条塞进 toast 的 120 字截断；
+// 仍留 4K 上限挡住上游异常返回整页 HTML 这类极端情况
+fn test_err_body(body: &str) -> String {
+    body.chars().take(4096).collect::<String>()
+}
+
 /// 获取模型：有 key 的供应商拉 /v1/models（OpenAI 兼容，data[].id）；
 /// 无 key 的默认上游（zcode）无公开 models 端点，直接回缓存清单
 pub async fn fetch_models(provider_id: &str) -> Result<Value, String> {
@@ -69,12 +75,14 @@ fn persist_models(provider_id: &str, models: &[String]) {
     }
 }
 
-/// 右键测试：tiny 请求（8 token / 单条 "hi"），返回 {ok, status, ms, error, model}。
+/// 模型测试：tiny 请求（8 token / 单条 "hi"），返回 {ok, status, ms, error, model}。
 /// zcode 上游：账号池 token 直打 messages（钉 3.16.3 头族），可指定账号单测；
-/// 通用上游：openai 兼容 chat/completions + api_key
+/// 通用上游：openai 兼容 chat/completions + api_key。model 由调用方指定（右键
+/// 某个模型 chip 时传入），未指定时回落到清单首个 / 内置默认。
 pub async fn test_provider(
     provider_id: &str,
     account_id: Option<String>,
+    model: Option<&str>,
 ) -> Result<Value, String> {
     let prov = find_provider(provider_id)
         .ok_or_else(|| crate::i18n::tr("err.provider.missing"))?;
@@ -89,24 +97,29 @@ pub async fn test_provider(
             Some(id) if !id.is_empty() => members.iter().find(|m| m.id == id),
             _ => members.first(),
         };
+        let picked = model.map(str::to_string)
+            .unwrap_or_else(|| "GLM-5.3-Flash".to_string());
         let Some(m) = member else {
             return Ok(json!({
                 "ok": false, "status": Value::Null, "ms": started.elapsed().as_millis() as u64,
                 "error": crate::i18n::tr("err.provider.no_account"),
-                "model": "GLM-5.3-Flash", "account": Value::Null,
+                "model": picked, "account": Value::Null,
             }));
         };
         (
             upstream::UPSTREAM_MESSAGES.to_string(),
             upstream::headers(&m.token, m.mid.as_deref()),
             json!({
-                "model": "GLM-5.3-Flash", "max_tokens": 8, "stream": false,
+                "model": picked, "max_tokens": 8, "stream": false,
                 "messages": [{ "role": "user", "content": "hi" }]
             }),
-            "GLM-5.3-Flash".to_string(),
+            picked,
             json!(m.name),
         )
     } else {
+        let picked = model.map(str::to_string)
+            .or_else(|| prov.models.first().cloned())
+            .unwrap_or_else(|| "gpt-4o-mini".into());
         (
             format!("{}/v1/chat/completions", prov.base_url.trim_end_matches('/')),
             vec![
@@ -114,11 +127,10 @@ pub async fn test_provider(
                 ("Content-Type".to_string(), "application/json".to_string()),
             ],
             json!({
-                "model": prov.models.first().cloned().unwrap_or_else(|| "gpt-4o-mini".into()),
-                "max_tokens": 8, "stream": false,
+                "model": picked, "max_tokens": 8, "stream": false,
                 "messages": [{ "role": "user", "content": "hi" }]
             }),
-            prov.models.first().cloned().unwrap_or_default(),
+            picked,
             Value::Null,
         )
     };
@@ -141,7 +153,7 @@ pub async fn test_provider(
                 "ok": status == 200,
                 "status": status,
                 "ms": ms,
-                "error": if status == 200 { Value::Null } else { json!(err_body(&text)) },
+                "error": if status == 200 { Value::Null } else { json!(test_err_body(&text)) },
                 "model": model,
                 "account": account,
             }))
