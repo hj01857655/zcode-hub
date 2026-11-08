@@ -192,7 +192,10 @@ function TextRow({ p }) {
   const [open, setOpen] = useState(false);
   const { meta, body } = splitLine(p.detail || p.raw);
 
-  // 单行视图：尝试结构化渲染 meta；若未命中 HTTP 行规则（touch-fail / cred-cooldown），回退 sl-detail 纯文本
+  // 单行视图：HTTP 行结构化渲染 + body 弱色全文（视觉溢出由 .sl-line 的 ellipsis
+  // 收掉，DOM 不截——复制/搜索拿得到全文）；非 HTTP 行回退 sl-detail 原文。
+  // React 元素不能 String() 转——展开视图 meta 也走组件渲染（曾写成
+  // String(structuredMeta)，产物是 "[object Object]"，11-08 修）
   const structuredMeta = HttpMeta({ meta });
 
   return (
@@ -202,17 +205,14 @@ function TextRow({ p }) {
         <span className="x-log-ts">{p.ts}</span>
         {" "}<span className="sl-flow">[{p.flow}]</span>
         {" "}<span className="sl-event">{p.event}</span>
-        {" "}
-        {structuredMeta
-          ? <span className="sl-detail">{structuredMeta}</span>
-          : <span className="sl-detail">{p.detail}</span>
-        }
+        {structuredMeta || <span className="sl-detail">{p.detail}</span>}
+        {body ? <span className="sl-body">{body}</span> : null}
       </div>
       {open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
-            {/* 展开视图：meta 也走结构化 pre */}
+            {/* meta 块：HTTP 行结构化（同单行），业务行纯文本 */}
             {meta
-              ? <pre className="x-log-pre">{structuredMeta ? String(structuredMeta) : meta}</pre>
+              ? <div className="x-log-pre">{structuredMeta || meta}</div>
               : null}
             {body ? <pre className="x-log-pre">{prettyJson(body)}</pre> : null}
           </div>

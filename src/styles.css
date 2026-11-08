@@ -1422,6 +1422,13 @@ input:focus-visible,
   margin-bottom: 10px;
 }
 .x-ls-filters select.zcode-path { width: auto; min-width: 200px; }
+/* 过滤行搜索框：.settings input 的 flex:1 会拉满整行——限幅自适应：
+   宽窗口 cap 320px 不拉满，窄窗口 floor 160px 不胶囊化 */
+.x-ls-filters .x-ls-search {
+  flex: 1 1 auto;
+  min-width: 160px;
+  max-width: 320px;
+}
 .x-log-more { margin-top: 6px; align-self: flex-start; padding: 3px 10px; font-size: 12px; }
 .x-log-row.clickable { cursor: pointer; }
 .x-log-detail {
@@ -1871,11 +1878,11 @@ input:focus-visible,
 .x-log-copy { padding: 2px 8px; font-size: 11px; margin-bottom: 4px; }
 
 /* —— 系统日志页：HTTP 行结构化渲染（单行 + 展开视图 meta 块） —— */
+/* 必须 inline：inline-flex 是原子盒，nowrap+ellipsis 无法从中间截断，行宽不够时
+   整个 URL 盒被整体吃掉——表现为行内只剩 event 名一个字符都看不见接口 */
 .sl-http {
   color: inherit;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  display: inline;
 }
 
 /* method 徽标：复用 x-log-method，get 特例加薄荷绿底 */
@@ -1979,7 +1986,11 @@ input:focus-visible,
   transition: transform 0.15s ease;
   transform-origin: center;
 }
-.x-log-item.expanded .x-log-caret { transform: rotate(90deg); color: var(--ink); }
+/* 展开旋转：只作用于本层行（> 直接子代）——树里 .x-log-item 两层嵌套（组容器
+   内套明细行），带空格的后代选择器会在组展开时把组内全部明细 caret 一起转穿；
+   .open（caret 自身，JSX 两处都挂）继续兜底非嵌套场景 */
+.x-log-item.expanded > .x-log-row .x-log-caret,
+.x-log-caret.open { transform: rotate(90deg); color: var(--ink); }
 .x-log-caret.none { visibility: hidden; }
 .x-log-item { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 /* 行展开：详情在行下方，横跨全宽（竖排形态） */

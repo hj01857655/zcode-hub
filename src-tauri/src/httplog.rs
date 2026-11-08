@@ -1,6 +1,7 @@
 //! HTTP 请求统一记录层：ureq 3.x Middleware 挂在共享 Agent 上，全仓 HTTP 调用
 //! （claim/touch/balance/oauth/token/referral 等全部 zcode 上游接口）自动落
-//! flowlog——URL/方法/请求体/状态/耗时/响应体截 2K，系统日志页可查。
+//! flowlog——URL/方法/请求体/状态/耗时/响应体（JSON 全量、非 JSON 截 2K，见
+//! resp_for_log），系统日志页可查。
 //!
 //! ureq 3.x 相比 2.x 的关键差异（本仓迁移决策的依据）：
 //! - middleware 收到 http::Request<SendBody>，请求体在链上可读（2.x 的 Request
@@ -25,15 +26,16 @@ use ureq::{Body, SendBody};
 
 use crate::flowlog;
 
-/// 响应体记录上限：balance 等响应可达 10K+，截 2K 足够排障且控日志体量
-const RESP_CAP: usize = 2048;
+/// 响应体落行策略：JSON 全量（展开视图要看完整结构，不截断）；非 JSON（WAF
+/// 拦截页 HTML 等可达数百 KB）截 2K 控日志体量——那类体本无结构可展开
+const PLAIN_CAP: usize = 2048;
 
-fn clip(s: &str, cap: usize) -> String {
-    if s.chars().count() <= cap {
-        s.to_string()
+fn resp_for_log(body: &str) -> &str {
+    if serde_json::from_str::<serde_json::Value>(body.trim()).is_ok() {
+        body
     } else {
-        let head: String = s.chars().take(cap).collect();
-        format!("{head}…[共 {} 字符]", s.chars().count())
+        let n = body.trim().char_indices().nth(PLAIN_CAP).map(|(i, _)| i).unwrap_or(body.trim().len());
+        &body.trim()[..n]
     }
 }
 
@@ -60,13 +62,14 @@ fn flow_of(url: &str) -> &'static str {
 /// req 与 resp 永不混行。
 fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
     let event = if (200..300).contains(&status) { "http-ok" } else { "http-err" };
+    // JSON 全量 / 非 JSON 截 2K（策略见 resp_for_log）
     flowlog::log(
         flow,
         event,
         &format!(
             "{method} {} → {status} ms={elapsed_ms} resp={}",
             short_url(url),
-            clip(body, RESP_CAP)
+            resp_for_log(body)
         ),
     );
 }
