@@ -83,7 +83,6 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const shownModels = provModels ?? (status?.models?.length
     ? { models: status.models, src: null, at: null }
     : null);
-  const [copiedModels, setCopiedModels] = useState(false);
   // 运行时保存落盘后服务仍用启动时快照，给一条明确提示而不是静默失败
   const [savedRestart, setSavedRestart] = useState(false);
 
@@ -321,7 +320,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     try { await navigator.clipboard.writeText(accessCurl); setCopiedEx(true); setTimeout(() => setCopiedEx(false), 1200); } catch { /* noop */ }
   };
 
-  // 供应商动作（magpie 式）：获取模型（回缓存/拉取）+ 右键测试（tiny 请求，独立直连不碰池）
+  // 供应商动作：获取模型（回缓存/拉取）+ 测试（tiny 请求，独立直连不碰池，绕开池轮转/熔断）
   const doFetchModels = () => guard(async () => {
     const r = await invoke("provider_fetch_models", { providerId: "zcode" });
     const list = Array.isArray(r.models) ? r.models : [];
@@ -329,14 +328,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     await refresh();
     toast(t("x.fetchedModels", { n: list.length }));
   }, true);
-  const copyFetchedModels = async () => {
-    const txt = (shownModels?.models || []).join("\n");
-    if (!txt) return;
-    try { await navigator.clipboard.writeText(txt); } catch { /* noop */ }
-    setCopiedModels(true);
-    setTimeout(() => setCopiedModels(false), 1200);
-  };
-  // 测试指定模型：右键某个模型 chip 时传该模型名；工具栏按钮测清单首个。
+  // 测试指定模型：传模型名；行尾按钮不传 = 测清单首个。
   // 结果弹窗展示完整字段（状态/耗时/账号/错误全文），不再挤进行内小标签靠 hover 读
   const doProvTest = (model) => guard(async () => {
     const r = await invoke("provider_test", {
@@ -475,53 +467,31 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
               </div>
           : null}
 
-        {/* 供应商条目：只做「获取模型」与「测首个模型」两个显式动作；模型级测试
-            在下方每个模型 chip 上右键触发，结果走弹窗。行本身无右键动作。 */}
-        <div className="x-pool-line" style={{ marginTop: 14, cursor: "default" }}>
+        {/* 上游供应商：单通道压成一行——host + 模型数（hover 展开清单）；动作只留
+            刷新模型面与单号直连测试两个小按钮，来源/时刻一并进行内 tag */}
+        <div className="x-pool-line" style={{ marginTop: 14, cursor: "default" }}
+          title={shownModels?.models?.length
+            ? `${t("x.modelsAvail")}:\n${shownModels.models.join("\n")}`
+            : t("x.modelsNone")}>
           <Ic name="sliders" size={14} />
-          <span>ZCode · zcode.z.ai</span>
+          <span>ZCode · zcode.z.ai · {t("x.modelsAvail")} {shownModels?.models?.length ?? 0}</span>
           {provBusy ? <span className="x-pool-tag">{t("x.provTesting")}</span> : null}
+          {shownModels?.src
+            ? <span className="x-pool-tag">
+                {t(shownModels.src === "cached" ? "x.modelsFromCache" : "x.modelsFromUpstream")}
+                {shownModels.at ? ` · ${shownModels.at.toLocaleTimeString()}` : ""}
+              </span>
+            : null}
           <span className="tb-spacer" />
-          <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
-            <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
+          <button className="btn-ghost has-ic" disabled={provBusy} onClick={doFetchModels}
+            title={t("x.fetchModelsBtn")}>
+            <Ic name="refresh" size={13} />
           </button>
-          <button className="btn-ghost" disabled={provBusy || !shownModels?.models?.length}
-            onClick={() => doProvTest(shownModels?.models?.[0])} title={t("x.provTestFirst")}>
-            <Ic name="bolt" size={13} /> {t("x.provTest")}
+          <button className="btn-ghost has-ic" disabled={provBusy || !shownModels?.models?.length}
+            onClick={() => doProvTest(null)} title={t("x.provTestFirst")}>
+            <Ic name="bolt" size={13} />
           </button>
         </div>
-        {/* 获取模型结果：清单常驻可见（toast 只是一瞬），标来源/时刻，一键复制整表 */}
-        {shownModels
-          ? <div className="x-prov-models">
-              <div className="x-prov-models-head">
-                <span className="x-prov-models-title">
-                  {t("x.modelsAvail")} · {shownModels.models.length}
-                  {shownModels.src
-                    ? <span className={"x-prov-src " + shownModels.src}>
-                        {t(shownModels.src === "cached" ? "x.modelsFromCache" : "x.modelsFromUpstream")}
-                      </span>
-                    : null}
-                  {shownModels.at ? <span className="x-prov-at">{shownModels.at.toLocaleTimeString()}</span> : null}
-                </span>
-                <button className="btn-ghost has-ic" onClick={copyFetchedModels} title={t("x.copyBtn")}>
-                  <Ic name={copiedModels ? "check" : "copy"} size={13} />
-                </button>
-              </div>
-              {shownModels.models.length
-                ? <>
-                    <div className="x-prov-models-list">
-                      {shownModels.models.map((m) => (
-                        <span className="x-prov-model" key={m} title={t("x.modelTestHint")}
-                          onContextMenu={(e) => { e.preventDefault(); if (!provBusy) doProvTest(m); }}>
-                          {m}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="hint">{t("x.modelTestHint")}</div>
-                  </>
-                : <div className="hint">{t("x.modelsNone")}</div>}
-            </div>
-          : null}
       </section>
 
       {/* 模型测试结果弹窗：完整字段常驻可读，不再挤进行内小标签靠 hover 读错误全文 */}

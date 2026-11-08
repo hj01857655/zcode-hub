@@ -322,7 +322,6 @@ export const en = {
   "x.provTesting": "Testing…",
   "x.fetchedModels": "Fetched {n} models",
   "x.fetchModelsBtn": "Fetch Models",
-  "x.modelTestHint": "Right-click a model to test just that model",
   "x.provTestFirst": "Test the first model in the list",
   "x.testResultOk": "Test passed",
   "x.testResultFail": "Test failed",

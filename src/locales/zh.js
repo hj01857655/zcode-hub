@@ -322,7 +322,6 @@ export const zh = {
   "x.provTesting": "测试中…",
   "x.fetchedModels": "已获取 {n} 个模型",
   "x.fetchModelsBtn": "获取模型",
-  "x.modelTestHint": "右键某个模型可单独测试该模型",
   "x.provTestFirst": "测试清单首个模型",
   "x.testResultOk": "测试成功",
   "x.testResultFail": "测试失败",
