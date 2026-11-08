@@ -487,13 +487,16 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
     let retry_delays = [500u64, 1500, 4000];
     // quota 读取链自建裸 Agent（不挂 httplog middleware）：每响应只落本函数的
     // 诊断行一行（http-ok-biz/http-err + http_diag_line），避免与 middleware 行
-    // 同响应双行刷屏；连接池独立对低频轮询无影响
+    // 同响应双行刷屏；连接池独立对低频轮询无影响。http_status_as_error(false)
+    // 与 httplog Agent 同语义：4xx/5xx 走 Ok(resp) 的 body 分流，Err 只剩网络层
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
     let agent = AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
+        ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_global(Some(Duration::from_secs(20)))
             .build()
+            .into()
     });
     let headers = if url.contains("zcode.z.ai") {
         zai_billing_headers_with_mid(token, mid.map(str::to_string))
@@ -505,66 +508,61 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
     loop {
         let mut req = agent.get(url);
         for (k, v) in &headers {
-            req = req.set(k, v);
+            req = req.header(k, v);
         }
         let t0 = std::time::Instant::now();
-        let resp = req.call();
-        match resp {
-            Ok(r) => {
-                let status = r.status();
-                let text = r.into_string().map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
-                // 频度治理：业务码正常的成功响应静默（balance/subscription 周期轮询
-                // 每号每轮 2-3 行常态成功行会淹掉错误行）；业务码异常（风控/限流/
-                // no_plan 之外的业务错）才落 http-ok-biz 行保留诊断证据
-                let biz_code = serde_json::from_str::<Value>(&text)
-                    .ok()
-                    .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
-                    .unwrap_or(0);
-                // bigmodel 风格的业务 401 走 HTTP 200 包装（令牌过期）——同样进冷却，
-                // 否则每轮额度刷新都白打一发
-                if biz_code == 401 {
+        let resp = req.call().map_err(|e| crate::i18n::trf("err.network", &[("e", &e.to_string())]))?;
+        let (status, text) = crate::httplog::read_resp(resp)
+            .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+        if (400..600).contains(&status) {
+            // HTTP 层 4xx/5xx：诊断行 + 业务 401（body code）→ 冷却、429 → 退避重试、
+            // 401/403 → 冷却，其余按响应 msg 报错
+            crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &text, t0.elapsed().as_millis()));
+            if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
                     mark_cred_cooldown(token);
+                    return Err(crate::i18n::tr("err.token.biz401"));
                 }
-                if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
-                    crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status.into(), &text, t0.elapsed().as_millis()));
-                }
-                return Ok(if text.is_empty() {
-                    Value::Null
-                } else {
-                    serde_json::from_str(&text).unwrap_or(Value::String(text.clone()))
-                });
             }
-            Err(ureq::Error::Status(code, r)) => {
-                let status: u16 = code;
-                let body = r.into_string().unwrap_or_default();
-                crate::flowlog::log("sys", "http-err", &http_diag_line(url, status, &body, t0.elapsed().as_millis()));
-                if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                    if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
-                        mark_cred_cooldown(token);
-                        return Err(crate::i18n::tr("err.token.biz401"));
+            if status == 429 {
+                match backoff.next() {
+                    Some(d) => {
+                        last_err = Some(crate::i18n::tr("err.quota.rate_limited"));
+                        sleep(Duration::from_millis(*d));
+                        continue;
                     }
+                    None => return Err(last_err.unwrap_or_else(|| crate::i18n::tr("err.quota.http429"))),
                 }
-                if code == 429 {
-                    match backoff.next() {
-                        Some(d) => {
-                            last_err = Some(crate::i18n::tr("err.quota.rate_limited"));
-                            sleep(Duration::from_millis(*d));
-                            continue;
-                        }
-                        None => return Err(last_err.unwrap_or_else(|| crate::i18n::tr("err.quota.http429"))),
-                    }
-                }
-                if code == 401 || code == 403 {
-                    mark_cred_cooldown(token);
-                    return Err(crate::i18n::trf("err.token.http401", &[("code", &code.to_string())]));
-                }
-                let msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| ["message", "msg", "error"].iter().find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)));
-                return Err(crate::i18n::trf("err.quota.http", &[("code", &code.to_string()), ("msg", &msg.unwrap_or_default())]));
             }
-            Err(e) => return Err(crate::i18n::trf("err.network", &[("e", &e.to_string())])),
+            if status == 401 || status == 403 {
+                mark_cred_cooldown(token);
+                return Err(crate::i18n::trf("err.token.http401", &[("code", &status.to_string())]));
+            }
+            let msg = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| ["message", "msg", "error"].iter().find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)));
+            return Err(crate::i18n::trf("err.quota.http", &[("code", &status.to_string()), ("msg", &msg.unwrap_or_default())]));
         }
+        // 频度治理：业务码正常的成功响应静默（balance/subscription 周期轮询
+        // 每号每轮 2-3 行常态成功行会淹掉错误行）；业务码异常（风控/限流/
+        // no_plan 之外的业务错）才落 http-ok-biz 行保留诊断证据
+        let biz_code = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("code").and_then(|c| c.as_i64()))
+            .unwrap_or(0);
+        // bigmodel 风格的业务 401 走 HTTP 200 包装（令牌过期）——同样进冷却，
+        // 否则每轮额度刷新都白打一发
+        if biz_code == 401 {
+            mark_cred_cooldown(token);
+        }
+        if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
+            crate::flowlog::log("sys", "http-ok-biz", &http_diag_line(url, status, &text, t0.elapsed().as_millis()));
+        }
+        return Ok(if text.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(Value::String(text.clone()))
+        });
     }
 }
 
@@ -818,10 +816,14 @@ pub(crate) fn pick_channels(creds: &Value, config: Option<&Value>, secret: &str,
                 creds.get("oauth:active_provider").and_then(|v| v.as_str()),
                 secret,
             );
+            // start-plan 槽 apiKey 只是登录时的 JWT 快照（重登录只回写 creds，config
+            // 快照会过期）。取票对齐 zai_billing_token：active 非 bigmodel 时 creds
+            // 新鲜 zcodejwttoken 优先，快照仅兜底——原条件方向反了（== bigmodel），
+            // active=zai 的号拿过期快照打 balance → 401（2026-11-08 农场号池实测）。
             let use_jwt = if id.starts_with("builtin:zai") {
                 jwt.is_some()
             } else {
-                jwt.is_some() && active.as_deref() == Some("bigmodel")
+                jwt.is_some() && active.as_deref() != Some("bigmodel")
             };
             let tok = if use_jwt { jwt } else { None }.or(key);
             if let Some(t) = tok {
