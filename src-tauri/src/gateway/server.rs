@@ -873,7 +873,8 @@ fn session_of(headers: &HeaderMap, body: &Value) -> Option<String> {
 
 /// pool 分发：选号 → 发上游 → 按错误档收尾。
 /// 粘性优先（成功游标不动）；429/3008-3010/5xx/网络错误换号重放（重试次数可配）；
-/// 3012/405 全局退避（时长可配）；全员不可用 503。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
+/// 3012/405 全局退避（时长可配）；全员不可用 503；对外状态码经 external_status 归一化
+/// （200 包错→429、401/403→503、风控→529）。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
 async fn pool_send(
     state: &SvcState,
     prepared: &[u8],
@@ -950,17 +951,23 @@ async fn pool_send(
                 upstream::note_risk_response(up.status, &up.body);
                 if upstream::is_global_risk(up.status, &up.body) {
                     state.shared.pool.global_backoff(state.backoff_secs);
+                    // 风控对外一律 529 overloaded：405/3012 与请求方法、客户端鉴权无关
+                    //（骑 200/400 均有实锤），透传原始状态会让客户端误判自己的请求错
                     return Err((
-                        StatusCode::from_u16(up.status).unwrap_or(StatusCode::FORBIDDEN),
-                        api_error_id("upstream_error", &up.body, req_id),
+                        StatusCode::from_u16(529).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
+                        api_error_id("overloaded_error", &up.body, req_id),
                     ));
                 }
                 if attempt < state.max_retries as usize && upstream::is_retryable(up.status, &up.body) {
                     continue;
                 }
+                // 对外状态码归一化（external_status）：上游撒谎档映射到 Anthropic 语义
+                // 等价类，其余（429/400/5xx/0）透传原始状态码
+                let (ext_status, ext_typ) =
+                    external_status(up.status).unwrap_or((up.status, "upstream_error"));
                 return Err((
-                    StatusCode::from_u16(up.status).unwrap_or(StatusCode::BAD_GATEWAY),
-                    api_error_id("upstream_error", &up.body, req_id),
+                    StatusCode::from_u16(ext_status).unwrap_or(StatusCode::BAD_GATEWAY),
+                    api_error_id(ext_typ, &up.body, req_id),
                 ));
             }
         }
@@ -975,6 +982,25 @@ fn api_error(typ: &str, msg: &str) -> Json<Value> {
 /// 带 req_id 的错误响应：客户端报错时引用此 ID 即可对到日志
 fn api_error_id(typ: &str, msg: &str, req_id: &str) -> Json<Value> {
     Json(json!({ "error": { "type": typ, "message": msg, "req_id": req_id } }))
+}
+
+/// 对外状态码归一化：客户端是 Anthropic SDK，按 HTTP 状态码归类重试与报错文案，
+/// 上游原始状态透传会撒三类谎——
+/// - 2xx/3xx（1005 额度耗尽骑 200，11-04 实锤）：对外 200 会让客户端把 error JSON
+///   当成功响应体解析（Claude Code 表现「流提前结束」，11-02 挂账）→ 429
+///   rate_limit_error，客户端退避重试；池已冷却该号，重试换号可成
+/// - 401/403（上游号 token 死/权限不足）：透传会让客户端误判自己鉴权失败
+///   （Claude Code 触发重新登录提示）→ 503 api_error，瞬时语义，重试换号即可
+/// - 405（WAF 风控）：对外是「方法错」谎言 → 529 overloaded_error（Anthropic 官方
+///   容量档，SDK 原生识别），客户端指数退避，正好等全局退避过期
+/// 其余（429/400/413/5xx/0）语义本就成立，返回 None 由调用方透传。
+fn external_status(status: u16) -> Option<(u16, &'static str)> {
+    match status {
+        200..=399 => Some((429, "rate_limit_error")),
+        401 | 403 => Some((503, "api_error")),
+        405 => Some((529, "overloaded_error")),
+        _ => None,
+    }
 }
 
 /// /v1/responses（M4/M5）：OpenAI Responses 入站 → anthropic 上游。
@@ -1101,4 +1127,28 @@ async fn responses_endpoint(
 
 fn get_str_req<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 对外状态码归一化：客户端按状态码归类重试与报错，上游撒谎档透传会误导客户端
+    #[test]
+    fn external_status_maps_lies_to_honest_classes() {
+        // 200 包业务错（1005 额度耗尽实锤）：对外必须非 2xx，否则客户端把 error JSON
+        // 当成功响应体解析（Claude Code「流提前结束」的根因）
+        assert_eq!(external_status(200), Some((429, "rate_limit_error")));
+        // 上游号 401/403 ≠ 客户端鉴权失败，透传会触发客户端重新登录提示
+        assert_eq!(external_status(401), Some((503, "api_error")));
+        assert_eq!(external_status(403), Some((503, "api_error")));
+        // 风控不是方法错
+        assert_eq!(external_status(405), Some((529, "overloaded_error")));
+        // 语义本就成立的透传
+        assert_eq!(external_status(0), None);
+        assert_eq!(external_status(429), None);
+        assert_eq!(external_status(502), None);
+        // 529 非 IANA 注册码：http crate 接受 100..=999，钉住这个前提
+        assert!(StatusCode::from_u16(529).is_ok());
+    }
 }
