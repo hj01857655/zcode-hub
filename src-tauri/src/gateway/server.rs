@@ -976,15 +976,21 @@ async fn pool_send(
         };
         let m = &members[idx];
         let t0 = std::time::Instant::now();
-        // 出口选择：代理池按账号粘性取出口（mode=off / 未装配 → 基础客户端直连）
-        let http = match &state.shared.proxies {
-            Some(px) => px.client_for(&m.id).unwrap_or_else(|| state.http.clone()),
-            None => state.http.clone(),
+        // 出口选择：代理池按账号粘性取出口（mode=off / 未装配 → 基础客户端直连）；
+        // 锁显式出块：std MutexGuard !Send，不得跨越下方 .await
+        let http = {
+            let px = state.shared.proxies.lock().ok();
+            match px.as_deref().and_then(Option::as_ref) {
+                Some(p) => p.client_for(&m.id).unwrap_or_else(|| state.http.clone()),
+                None => state.http.clone(),
+            }
         };
         match upstream::messages_stream(&http, &m.token, m.mid.as_deref(), prepared).await {
             Ok(resp) => {
-                if let Some(px) = &state.shared.proxies {
-                    px.mark_ok(&m.id); // 出口负分回血
+                if let Ok(px) = state.shared.proxies.lock() {
+                    if let Some(p) = px.as_ref() {
+                        p.mark_ok(&m.id); // 出口负分回血
+                    }
                 }
                 // 记账延迟到消费点（SettleGuard）——响应头到达即释放会超发并发
                 return Ok(UpstreamOk {
@@ -1018,8 +1024,10 @@ async fn pool_send(
                 }
                 // 出口健康归因（3009/3010 = IP 级并发档：瞬时负载，不迁移账号）
                 if upstream::is_ip_conc_limit(&up.body) {
-                    if let Some(px) = &state.shared.proxies {
-                        px.on_ip_conc(&m.id);
+                    if let Ok(px) = state.shared.proxies.lock() {
+                        if let Some(p) = px.as_ref() {
+                            p.on_ip_conc(&m.id);
+                        }
                     }
                 }
                 // 错误摘要：body 截前 200 字符，展开详情用
@@ -1040,11 +1048,13 @@ async fn pool_send(
                     // 绑定账号迁移新出口；有池可换时全局退避缩短（全池冻结 10min
                     // 只在直连无替代出口时有意义）
                     let mut backoff = state.backoff_secs;
-                    if let Some(px) = &state.shared.proxies {
-                        px.on_risk(&m.id);
-                        let rb = px.risk_backoff_secs();
-                        if rb > 0 && px.size() > 0 {
-                            backoff = rb;
+                    if let Ok(px) = state.shared.proxies.lock() {
+                        if let Some(p) = px.as_ref() {
+                            p.on_risk(&m.id);
+                            let rb = p.risk_backoff_secs();
+                            if rb > 0 && p.size() > 0 {
+                                backoff = rb;
+                            }
                         }
                     }
                     state.shared.pool.global_backoff(backoff);

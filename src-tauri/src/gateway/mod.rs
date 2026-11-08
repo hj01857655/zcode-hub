@@ -22,8 +22,9 @@ pub struct GatewayShared {
     /// per-account 模型面镜像（server.rs ensure_model_faces 回写），供 gateway_status 拼进池成员。
     /// id → None=拉取失败/未拉取（未知），Some(空)=确认无桶，Some(list)=确认模型集
     pub model_faces: Mutex<std::collections::HashMap<String, Option<Vec<String>>>>,
-    /// 出网代理池（config.proxy mode=off 时不装配）：账号↔IP 粘性 + 风控迁移 + 健康计分
-    pub proxies: Option<proxy::ProxyPool>,
+    /// 出网代理池（config.proxy mode=off 时不装配）：账号↔IP 粘性 + 风控迁移 + 健康计分。
+    /// Mutex 持 Option：网关每次 start() 按最新 config 重建（UI 改配置重启即生效）
+    pub proxies: Mutex<Option<proxy::ProxyPool>>,
 }
 impl GatewayShared {
     pub fn model_list(&self) -> Vec<String> {
@@ -113,7 +114,7 @@ impl GatewayState {
                     pool: pool::Pool::new(),
                     models: Mutex::new(MODEL_LIST.iter().map(|s| s.to_string()).collect()),
                     model_faces: Mutex::new(std::collections::HashMap::new()),
-                    proxies: proxy::ProxyPool::from_config(&cfg),
+                    proxies: Mutex::new(proxy::ProxyPool::from_config(&cfg)),
                 }
             }),
         }
@@ -142,6 +143,10 @@ impl GatewayState {
             .try_into()
             .map_err(|e| format!("bad port {}: {e}", cfg.port))?;
         let svc_cfg = cfg.clone();
+        // 池随网关启动装配：UI 保存过 proxy 配置后重启即按新配置重建（mode=off → None 直连）
+        if let Ok(mut px) = self.shared.proxies.lock() {
+            *px = proxy::ProxyPool::from_config(&cfg);
+        }
         let shared = std::sync::Arc::clone(&self.shared);
         let running = &self.running;
 

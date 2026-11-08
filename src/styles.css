@@ -1375,6 +1375,22 @@ input:focus-visible,
   outline: none;
 }
 .x-tune-panel input.zcode-path:focus { border-color: var(--amber-deep); }
+/* 代理池 mode=pool 的出口清单文本域：与 input 同壳，可纵向拉伸 */
+.x-tune-panel textarea.zcode-path {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg-2);
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 7px 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 84px;
+}
+.x-tune-panel textarea.zcode-path:focus { border-color: var(--amber-deep); }
 .x-tune-panel .pv-sub { margin-bottom: 4px; }
 /* 调优网格分两组：CORS 这类长文本项跨全行（220px 列写不开 URL 列表）；
    列数沿用 .x-tune 基础 auto-fit（minmax(220px,1fr)，760 弹窗下同样 3 列，窄屏自动降列不挤）；

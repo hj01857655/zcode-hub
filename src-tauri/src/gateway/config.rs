@@ -70,7 +70,7 @@ pub struct ProxyConfig {
     pub sticky_per_account: Option<bool>,
     /// IP 级风控时账号迁移新出口（默认 true）
     pub rotate_on_risk: Option<bool>,
-    /// 405/3012 迁移后的全局退避秒数（默认 45；设 0 = 维持 global_backoff_secs）
+    /// 405/3012 迁移后的全局退避秒数（默认 45；0/负值同样回落默认，与 Go 版 RiskBackoff 语义一致）
     pub risk_backoff_secs: Option<u64>,
     /// 出口健康分下限（默认 -2，触底踢出轮转）
     pub min_score: Option<i32>,

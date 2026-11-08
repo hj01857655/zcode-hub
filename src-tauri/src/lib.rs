@@ -1709,6 +1709,13 @@ async fn gateway_start(
     body_limit_mb: Option<u64>,
     log_to_disk: Option<bool>,
     log_file_max_mb: Option<u64>,
+    proxy_mode: Option<String>,
+    proxy_single: Option<String>,
+    proxy_proxies: Option<Vec<String>>,
+    proxy_sticky: Option<bool>,
+    proxy_rotate: Option<bool>,
+    proxy_risk_backoff_secs: Option<u64>,
+    proxy_min_score: Option<i32>,
 ) -> Result<serde_json::Value, String> {
     let state = app.state::<gateway::GatewayState>();
     // 配置更新：只在提供字段时改写（表单保存语义）
@@ -1729,6 +1736,14 @@ async fn gateway_start(
         if let Some(v) = body_limit_mb { if v > 0 && v <= 512 { cfg.body_limit_mb = v; } }
         if let Some(v) = log_to_disk { cfg.log_to_disk = v; }
         if let Some(v) = log_file_max_mb { if v > 0 && v <= 1024 { cfg.log_file_max_mb = v; } }
+        // 代理池配置（None = 沿用盘上值，表单保存语义；出口列表 trim 去空行）
+        if let Some(v) = proxy_mode { if matches!(v.as_str(), "off" | "single" | "pool") { cfg.proxy.mode = v; } }
+        if let Some(v) = proxy_single { cfg.proxy.single = v.trim().to_string(); }
+        if let Some(v) = proxy_proxies { cfg.proxy.proxies = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
+        if let Some(v) = proxy_sticky { cfg.proxy.sticky_per_account = Some(v); }
+        if let Some(v) = proxy_rotate { cfg.proxy.rotate_on_risk = Some(v); }
+        if let Some(v) = proxy_risk_backoff_secs { cfg.proxy.risk_backoff_secs = Some(v.min(86400)); }
+        if let Some(v) = proxy_min_score { cfg.proxy.min_score = Some(v.clamp(-10, 0)); }
         // 落盘：不保存的话新端口/密钥重启即丢，UI 上的「保存」就成了骗局
         if let Err(e) = cfg.save() {
             flowlog::log("gateway", "config-save-fail", &e.to_string());
@@ -1768,6 +1783,11 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
             };
         }
     }
+    // 出口运行态快照（脱敏 url + 健康分/冷却/绑定数）；mode=off / 未装配为空数组
+    let proxy_stats = {
+        let px = state.shared.proxies.lock().ok();
+        px.as_deref().and_then(Option::as_ref).map(|p| p.status()).unwrap_or_default()
+    };
     Ok(json!({
         "running": state.is_running(),
         "port": cfg.port,
@@ -1797,6 +1817,15 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         "bodyLimitMb": cfg.body_limit_mb,
         "logToDisk": cfg.log_to_disk,
         "logFileMaxMb": cfg.log_file_max_mb,
+        // 代理池配置回显（Option 字段回填内置默认后的生效值；出口运行态走 status()）
+        "proxyMode": cfg.proxy.mode,
+        "proxySingle": cfg.proxy.single,
+        "proxyProxies": cfg.proxy.proxies,
+        "proxySticky": cfg.proxy.sticky_per_account.unwrap_or(true),
+        "proxyRotate": cfg.proxy.rotate_on_risk.unwrap_or(true),
+        "proxyRiskBackoffSecs": cfg.proxy.risk_backoff_secs.unwrap_or(45),
+        "proxyMinScore": cfg.proxy.min_score.unwrap_or(-2),
+        "proxyStats": proxy_stats,
     }))
 }
 
