@@ -1,0 +1,55 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m   Compiling[0m zcode-hub v1.10.1 (/home/runner/work/zcode-hub/zcode-hub/src-tauri)
+[1m[91merror[E0433][0m[1m: cannot find `config` in `ureq`[0m
+   [1m[94m--> [0msrc/quota.rs:494:15
+    [1m[94m|[0m
+[1m[94m494[0m [1m[94m|[0m         ureq::config::Config::builder()
+    [1m[94m|[0m               [1m[91m^^^^^^[0m [1m[91mcould not find `config` in `ureq`[0m
+
+[1m[91merror[E0425][0m[1m: cannot find function `read_resp` in module `crate::httplog`[0m
+   [1m[94m--> [0msrc/quota.rs:515:46
+    [1m[94m|[0m
+[1m[94m515[0m [1m[94m|[0m         let (status, text) = crate::httplog::read_resp(resp)
+    [1m[94m|[0m                                              [1m[91m^^^^^^^^^[0m [1m[91mnot found in `crate::httplog`[0m
+
+[1m[91merror[E0061][0m[1m: this method takes 1 argument but 2 arguments were supplied[0m
+   [1m[94m--> [0msrc/quota.rs:511:23
+    [1m[94m|[0m
+[1m[94m511[0m [1m[94m|[0m             req = req.header(k, v);
+    [1m[94m|[0m                       [1m[91m^^^^^^[0m    [1m[94m-[0m [1m[94munexpected argument #2 of type `&std::string::String`[0m
+    [1m[94m|[0m
+[1m[92mnote[0m: method defined here
+   [1m[94m--> [0m/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ureq-2.12.1/src/request.rs:322:12
+    [1m[94m|[0m
+[1m[94m322[0m [1m[94m|[0m     pub fn header(&self, name: &str) -> Option<&str> {
+    [1m[94m|[0m            [1m[92m^^^^^^[0m
+[1m[96mhelp[0m: remove the extra argument
+    [1m[94m|[0m
+[1m[94m511[0m [91m- [0m            req = req.header(k[91m, v[0m);
+[1m[94m511[0m [92m+ [0m            req = req.header(k);
+    [1m[94m|[0m
+
+[1m[91merror[E0308][0m[1m: mismatched types[0m
+   [1m[94m--> [0msrc/quota.rs:511:19
+    [1m[94m|[0m
+[1m[94m509[0m [1m[94m|[0m         let mut req = agent.get(url);
+    [1m[94m|[0m                       [1m[94m--------------[0m [1m[94mexpected due to this value[0m
+[1m[94m510[0m [1m[94m|[0m         for (k, v) in &headers {
+[1m[94m511[0m [1m[94m|[0m             req = req.header(k, v);
+    [1m[94m|[0m                   [1m[91m^^^^^^^^^^^^^^^^[0m [1m[91mexpected `Request`, found `Option<&str>`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: expected struct `[1m[35mureq::Request[0m`
+                 found enum `[1m[35mstd::option::Option<&str>[0m`
+
+[1m[91merror[E0599][0m[1m: no method named `clone` found for type `str` in the current scope[0m
+   [1m[94m--> [0msrc/quota.rs:564:70
+    [1m[94m|[0m
+[1m[94m564[0m [1m[94m|[0m             serde_json::from_str(&text).unwrap_or(Value::String(text.clone()))
+    [1m[94m|[0m                                                                      [1m[91m^^^^^[0m
+    [1m[94m|[0m
+[1m[96mhelp[0m: there is a method `clone_into` with a similar name, but with different arguments
+   [1m[94m--> [0m/rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/borrow.rs:66:4
+
+[1mSome errors have detailed explanations: E0061, E0308, E0425, E0433, E0599.[0m
+[1mFor more information about an error, try `rustc --explain E0061`.[0m
+[1m[91merror[0m: could not compile `zcode-hub` (lib test) due to 5 previous errors
