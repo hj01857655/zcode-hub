@@ -1004,13 +1004,14 @@ fn external_status(status: u16) -> Option<(u16, &'static str)> {
 }
 
 /// 对外 error 体字段提取：上游 body 是 JSON 时取业务 code（顶层优先，其次 error 内层，
-/// 字符串数字也收）与 msg/message 正文；非 JSON（WAF HTML 页等）message 原样截断、
-/// 无 code。口径与 upstream.rs body_code 对齐——那边是私有实现且该文件不在本线改动
-/// 范围（另一会话未提交），这里自带轻量版。
+/// 字符串数字也收）与 msg/message 正文；非 JSON（WAF HTML 页等）message 原样透出、
+/// 无 code——body 捕获侧（upstream.rs messages_stream）已限 4096 字，这里不再截。
+/// 口径与 upstream.rs body_code 对齐——那边是私有实现且该文件不在本线改动范围
+/// （另一会话未提交），这里自带轻量版。
 fn external_error_fields(body: &str) -> (Option<i64>, String) {
-    let clipped = || body.trim().chars().take(200).collect::<String>();
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
-        return (None, clipped());
+    let trimmed = body.trim();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return (None, trimmed.to_string());
     };
     let pick = |keys: &[&str]| {
         keys.iter()
@@ -1023,7 +1024,7 @@ fn external_error_fields(body: &str) -> (Option<i64>, String) {
         .and_then(|m| m.as_str())
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty());
-    (code, msg.unwrap_or_else(clipped))
+    (code, msg.unwrap_or_else(|| trimmed.to_string()))
 }
 
 /// 上游错误 → 对外 error 体：type 由调用方定（external_status 归一化档或透传档），
@@ -1199,10 +1200,11 @@ mod tests {
         let (code, msg) = external_error_fields(r#"{"error":{"code":3004,"message":"flow expired"}}"#);
         assert_eq!(code, Some(3004));
         assert_eq!(msg, "flow expired");
-        // 非 JSON（WAF HTML 页）原样截断、无 code
-        let (code, msg) = external_error_fields("<html>blocked by WAF</html>");
+        // 非 JSON（WAF HTML 页）原样透出（不截），无 code
+        let html = format!("<html>blocked by WAF{}</html>", "x".repeat(300));
+        let (code, msg) = external_error_fields(&html);
         assert_eq!(code, None);
-        assert_eq!(msg, "<html>blocked by WAF</html>");
+        assert_eq!(msg, html);
         // 组装出口：type 过归一化档、code 带入 error 对象
         let body = upstream_error_body(
             "rate_limit_error",
