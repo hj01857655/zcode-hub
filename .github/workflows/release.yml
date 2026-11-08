@@ -140,3 +140,45 @@ jobs:
           find src-tauri/target -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
             | xargs sha256sum | sed 's| .*/| |' > "checksums-${RUNNER_OS}-${ARCH}-${REF_TAG}.txt"
           gh release upload "$REF_TAG" "checksums-${RUNNER_OS}-${ARCH}-${REF_TAG}.txt" --clobber
+
+      # 分类式 release notes：conventional commits 按 cliff.toml 分类（🚀 新功能/🐛 修复/🎨 样式/…），
+      # 覆盖 tauri-action 的静态 body。Windows 腿执行一次即可，六腿并发 edit 会竞态；
+      # 手动触发（mac-test tag）不覆盖。tag push 时 HEAD 即 tag commit，--latest 恰好取该版本区间
+      - name: Generate categorized release notes
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v') && matrix.arch == 'x64'
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --latest --strip all
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Apply release notes
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v') && matrix.arch == 'x64'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.cliff.outputs.content }}
+        run: |
+          {
+            echo "见 [README](https://github.com/${{ github.repository }}/blob/main/README.md) 了解完整功能"
+            echo
+            printf '%s\n' "$NOTES"
+            echo
+            echo "## 下载"
+            echo
+            echo "- **Windows**：\`*_x64-setup.exe\`（x64）／\`*_arm64-setup.exe\`（ARM64）安装包；\`*_portable.exe\` 便携版"
+            echo "- **macOS**：\`*_aarch64.dmg\`（Apple 芯片）／\`*_x64.dmg\`（Intel 芯片）"
+            echo "- **Linux**：\`*amd64.deb\`／\`*arm64.deb\`／\`*.AppImage\`"
+            echo
+            echo "## 未签名提示"
+            echo
+            echo "- Windows：SmartScreen 选「更多信息 → 仍要运行」"
+            echo "- macOS：Gatekeeper 右键打开"
+            echo "- Linux：AppImage 需 \`chmod +x\`"
+            echo
+            echo "SHA-256 校验和见附 \`checksums-*.txt\`。"
+          } > release-body.md
+          gh release edit "$REF_TAG" --notes-file release-body.md
