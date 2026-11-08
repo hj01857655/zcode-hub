@@ -23,15 +23,27 @@ const DYNAMIC = [
   "q.win.daily", "q.win.weekly", "q.win.monthly", "q.win.cycle",
   "prov.bigmodel", "prov.zai",
   "m.bitProbeNoPlan", "m.bitProbeAuthFailed",
+  "r.task.login_device", "r.task.referral_bind_code",
+  "r.task.referral_new_user_reward", "r.task.send_message",
 ];
 
 const callRe = /\bt\(\s*(["'])((?:(?!\1).)+)\1/g; // 只匹配引号串；模板串走 DYNAMIC
-const files = readdirSync(join(root, "src")).filter((f) => f.endsWith(".js"));
-for (const f of files) {
-  const src = readFileSync(join(root, "src", f), "utf8");
+// 递归扫 .js/.jsx：绝大多数视图是 src/views/*.jsx 与 src/components/*.jsx，
+// 只扫 src 顶层会让 check:i18n 在缺键时照样报绿
+function sources(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    return e.isDirectory() ? sources(p) : /\.(js|jsx)$/.test(e.name) ? [p] : [];
+  });
+}
+for (const p of sources(join(root, "src"))) {
+  const f = p.slice(root.length + 1);
+  const src = readFileSync(p, "utf8");
   for (const m of src.matchAll(callRe)) {
     const key = m[2];
-    if (!zh.has(key) || !en.has(key)) errs.push(`${f}: 用了未定义 key: ${key}`);
+    // 前缀拼接（t("r.task." + k)）：只要词表里存在以该前缀开头的键即视为覆盖
+    const prefixed = key.endsWith(".") && [...zh].some((k) => k.startsWith(key)) && [...en].some((k) => k.startsWith(key));
+    if (!prefixed && (!zh.has(key) || !en.has(key))) errs.push(`${f}: 用了未定义 key: ${key}`);
   }
 }
 for (const k of DYNAMIC) {
