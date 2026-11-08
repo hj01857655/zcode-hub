@@ -416,12 +416,13 @@ async fn messages(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = translate::aggregate_sse(&raw, &model);
+        ok.settle.settle_success();
         push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     // 流式：上游 SSE 原样透传（Anthropic 原生客户端，事件形态一致，零转换）
     let ok = pool_send(&state, &prepared, "/v1/messages", &model, stream, &req_preview, &req_id, sticky).await?;
-    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id, settle } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -481,6 +482,7 @@ async fn messages(
                 acc.push_str(TRUNC_TAIL);
             }
         }
+        settle.settle_success();
         push_ok_log(
             &shared,
             "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)),
@@ -535,12 +537,13 @@ async fn chat_completions(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = openai::aggregate_sse_to_openai(&raw, &model);
+        ok.settle.settle_success();
         push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
 
     let ok = pool_send(&state, &prepared, "/v1/chat/completions", &model, stream, &req_preview, &req_id, sticky).await?;
-    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id, settle } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -606,6 +609,7 @@ async fn chat_completions(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
+        settle.settle_success();
         push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
@@ -617,6 +621,56 @@ async fn chat_completions(
 enum UpstreamReply {
     /// 上游统一走 stream=true，非流式路径由调用侧 bytes().await 聚合
     Stream(reqwest::Response),
+}
+
+/// 成功路径的延迟记账句柄：上游 user 并发按活跃流计（3008 语义），在飞窗口
+/// 必须覆盖整个流式读取期——响应头到达即释放会让池内计数小于上游真实占用，
+/// session pin 下的并行请求必然超发。消费点收尾调 settle_success()；句柄被
+/// Drop 且未记账时（客户端中途断开等）按成功兜底落账——连接断开不代表账号
+/// 坏了，且在飞名额必须回收，否则永久泄漏。
+/// settle(ok=true) 只用 inner.sticky 开关挪游标、不碰会话表，故此处 Sticky::None
+/// 与原调用点的 sticky 参数语义完全等价。
+struct SettleGuard {
+    shared: std::sync::Arc<super::GatewayShared>,
+    member_id: String,
+    idx: usize,
+    member_count: usize,
+    done: std::sync::atomic::AtomicBool,
+}
+
+impl SettleGuard {
+    fn new(
+        shared: std::sync::Arc<super::GatewayShared>,
+        member_id: String,
+        idx: usize,
+        member_count: usize,
+    ) -> Self {
+        Self {
+            shared,
+            member_id,
+            idx,
+            member_count,
+            done: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn settle_success(&self) {
+        if !self.done.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.shared
+                .pool
+                .settle(&self.member_id, self.idx, self.member_count, true, 0, pool::Sticky::None);
+        }
+    }
+}
+
+impl Drop for SettleGuard {
+    fn drop(&mut self) {
+        if !self.done.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.shared
+                .pool
+                .settle(&self.member_id, self.idx, self.member_count, true, 0, pool::Sticky::None);
+        }
+    }
 }
 
 /// 手写整体请求超时中间件（不引 tower-http）：兜底防请求永久挂死（如上游 TCP 半开）。
@@ -704,6 +758,8 @@ struct UpstreamOk {
     started: std::time::Instant,
     /// 请求关联 ID：一次客户端请求（含换号重试产生的多条日志）共用
     req_id: String,
+    /// 延迟记账句柄：消费点收尾时 settle_success()，覆盖完整流式窗口
+    settle: SettleGuard,
 }
 
 /// 日志 body 截断：超长按字符裁切并标记，避免单条请求把日志环/落盘撑爆
@@ -922,7 +978,7 @@ async fn pool_send(
         let t0 = std::time::Instant::now();
         match upstream::messages_stream(&state.http, &m.token, m.mid.as_deref(), prepared).await {
             Ok(resp) => {
-                state.shared.pool.settle(&m.id, idx, members.len(), true, 0, sticky);
+                // 记账延迟到消费点（SettleGuard）——响应头到达即释放会超发并发
                 return Ok(UpstreamOk {
                     reply: UpstreamReply::Stream(resp),
                     account: m.name.clone(),
@@ -931,11 +987,27 @@ async fn pool_send(
                     started: t0,
                     attempt,
                     req_id: req_id.to_string(),
+                    settle: SettleGuard::new(
+                        std::sync::Arc::clone(&state.shared),
+                        m.id.clone(),
+                        idx,
+                        members.len(),
+                    ),
                 });
             }
             Err(up) => {
                 let cd = upstream::cooldown_secs(up.status, &up.body);
-                state.shared.pool.settle(&m.id, idx, members.len(), false, cd, sticky);
+                if upstream::is_user_concurrency_limit(&up.body) {
+                    // 3008 user 级并发上限：预期内容量拒绝——只释放在飞 + 挪游标 +
+                    // 解 pin + 落单次冷却，不进熔断窗口（连撞几次触发 10min 长冷却
+                    // 会把全池拖进冷却雪崩，实际容量反而低于设计值）
+                    state
+                        .shared
+                        .pool
+                        .settle_transient(&m.id, idx, members.len(), cd, sticky);
+                } else {
+                    state.shared.pool.settle(&m.id, idx, members.len(), false, cd, sticky);
+                }
                 // 错误摘要：body 截前 200 字符，展开详情用
                 let err_sum: String = up.body.chars().take(200).collect();
                 state.shared.push_log(json!({
@@ -1079,11 +1151,12 @@ async fn responses_endpoint(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = super::responses::aggregate_sse_to_responses(&raw, &model);
+        ok.settle.settle_success();
         push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &ua, &req_preview, false, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     let ok = pool_send(&state, &prepared, "/v1/responses", &model, true, &req_preview, &req_id, sticky).await?;
-    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id, settle } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -1153,6 +1226,7 @@ async fn responses_endpoint(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
+        settle.settle_success();
         push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &ua, &req_preview, truncated, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));

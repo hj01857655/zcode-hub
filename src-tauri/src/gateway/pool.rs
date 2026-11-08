@@ -117,15 +117,17 @@ impl Pool {
         }
         // 会话 pin 命中：号还在池、不在冷却、在飞未满才直接用；否则落回游标扫描并重新 pin
         if let Sticky::Session(sid) = sticky {
-            if let Some((mid, _seen)) = inner.sessions.get(sid) {
-                let mid = mid.clone();
-                inner.sessions.get_mut(sid).unwrap().1 = Instant::now();
+            if let Some(mid) = inner.sessions.get(sid).map(|(mid, _)| mid.clone()) {
                 if let Some(idx) = members.iter().position(|m| m.id == mid) {
                     let m = &members[idx];
                     if !inner.cool.contains_key(&m.id)
                         && inner.inflight.get(&m.id).copied().unwrap_or(0) < MAX_INFLIGHT
                         && Self::supports(m, model)
                     {
+                        // 命中且可用才续期：失效 pin 不续命（TTL 语义保真）
+                        if let Some(entry) = inner.sessions.get_mut(sid) {
+                            entry.1 = Instant::now();
+                        }
                         *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
                         return Some(idx);
                     }
@@ -253,6 +255,39 @@ impl Pool {
         }
     }
 
+    /// 预期内容量拒绝（3008 user 级并发上限）专用收尾：释放在飞 + 失败挪游标 +
+    /// 解除该会话 pin + 落调用方给的单次冷却，但不进成功率窗口/连败计数。
+    /// 与 settle(false) 的差异：3008 不代表账号健康恶化（并发档是结构性约束），
+    /// 记入熔断窗口会把 chronic 3008 放大成全池 10min 长冷却雪崩。
+    pub fn settle_transient(
+        &self,
+        member_id: &str,
+        idx: usize,
+        member_count: usize,
+        cooldown_secs: u64,
+        sticky: Sticky<'_>,
+    ) {
+        let mut inner = match self.0.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        inner.total_err += 1; // 统计口径如实：这是真实发生的上游失败
+        if let Some(c) = inner.inflight.get_mut(member_id) {
+            *c = c.saturating_sub(1);
+        }
+        if member_count > 0 {
+            inner.cursor = (idx + 1) % member_count;
+        }
+        if let Sticky::Session(sid) = sticky {
+            inner.sessions.remove(sid);
+        }
+        if cooldown_secs > 0 {
+            inner
+                .cool
+                .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
+        }
+    }
+
     /// 状态快照：账号 id → 冷却剩余秒；全局退避；累计计数。twoapi_status / 前端池可视化消费。
     pub fn snapshot(&self, members: &[PoolMember]) -> Value {
         let mut inner = match self.0.lock() {
@@ -363,6 +398,24 @@ mod tests {
         let j = pool.pick(&m, Sticky::None, None).unwrap();
         assert_ne!(j, i);
         assert!(pool.snapshot(&m)["members"][i]["cooldown_secs"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn capacity_rejections_never_trip_breaker() {
+        let m = members2();
+        let pool = Pool::new();
+        // 连败阈值压到 2（settle(false) 两次即长冷却）作为放大器对照
+        pool.set_allowed_fails(2);
+        // 3008 走 transient：连撞 6 次不触发熔断，池保持可用，无任何冷却
+        for _ in 0..6 {
+            let i = pool.pick(&m, Sticky::None, None).unwrap();
+            pool.settle_transient(&m[i].id, i, m.len(), 0, Sticky::None);
+        }
+        for idx in 0..m.len() {
+            let cd = pool.snapshot(&m)["members"][idx]["cooldown_secs"].as_u64().unwrap();
+            assert_eq!(cd, 0, "member {idx} 不得进任何冷却（含熔断）");
+        }
+        assert!(pool.pick(&m, Sticky::None, None).is_some());
     }
 
     #[test]

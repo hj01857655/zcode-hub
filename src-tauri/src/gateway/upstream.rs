@@ -191,6 +191,12 @@ pub fn is_retryable(status: u16, body: &str) -> bool {
         || matches!(body_code(body), Some(3008 | 3009 | 3010))
 }
 
+/// user 级并发上限（3008）：预期内容量拒绝，账号本身健康——收尾走 settle_transient
+/// 不进熔断窗口，避免 chronic 3008 放大成全池 10min 长冷却雪崩
+pub fn is_user_concurrency_limit(body: &str) -> bool {
+    body_code(body) == Some(3008)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
