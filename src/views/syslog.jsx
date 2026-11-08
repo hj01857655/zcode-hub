@@ -29,21 +29,72 @@ const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
 // 行拆分：req=/resp= 是 detail 尾部锚点——http-req 行以 req= 收尾、中间件结果行
 // 以 resp= 收尾，各自把行切成「元信息 + JSON 体」两段；体是 JSON 就缩进格式化
 // （落盘时空白已压平，parse 不受影响），不是就原样。请求行与响应体分开渲染。
+// 两个锚点长度不同（req= 4 字符、resp= 5），偏移各按锚点算——统一 +5 会把 req=
+// 行的体首字符（{）切掉，prettyJson 解析失败退化原文（存量 bug，11-08 修）。
 // 已知边界：体内容里再出现 req=/resp= 字样时 lastIndexOf 切错位，只影响展开视图
 // 的归属显示，不丢行不崩溃
 function splitLine(detail) {
-  const i = Math.max(detail.lastIndexOf("resp="), detail.lastIndexOf("req="));
-  if (i === -1) return { meta: detail, body: "" };
-  return { meta: detail.slice(0, i).trimEnd(), body: detail.slice(i + 5).trim() };
+  const iR = detail.lastIndexOf("resp=");
+  const iQ = detail.lastIndexOf("req=");
+  if (iQ > iR) return { meta: detail.slice(0, iQ).trimEnd(), body: detail.slice(iQ + 4).trim() };
+  if (iR !== -1) return { meta: detail.slice(0, iR).trimEnd(), body: detail.slice(iR + 5).trim() };
+  return { meta: detail, body: "" };
 }
 
 const FLOWS = ["all", "oauth", "claim", "switch", "gateway", "sys"];
 
+// HTTP 行 meta 结构化：结果行「{method} {url} → {status} ms={n}」、请求行「{method} {url}」。
+// 命中则行内徽标化（method 徽标、host 弱化、path 亮、状态分色、耗时弱化），未命中
+//（touch-fail / cred-cooldown 等业务行）回退纯文本 sl-detail。行格式不变，纯展示层。
+const HTTP_RESULT_RE = /^([A-Z]+) (\S+) → (\d+) ms=(\d+)$/;
+const HTTP_REQ_RE = /^([A-Z]+) (\S+)$/;
+
+function splitUrl(u) {
+  const i = u.indexOf("/");
+  return i === -1 ? { host: u, path: "" } : { host: u, path: u.slice(i) };
+}
+
+function statusCls(status) {
+  if (status === 0 || status >= 500) return "fail";
+  if (status >= 400) return "warn";
+  return "ok";
+}
+
+function HttpMeta({ meta }) {
+  const m = meta.match(HTTP_RESULT_RE);
+  if (m) {
+    const [, method, url, status, ms] = m;
+    const { host, path } = splitUrl(url);
+    return (
+      <span className="sl-http">
+        {" "}<span className={"x-log-method" + (method === "GET" ? " get" : "")}>{method}</span>
+        {" "}<span className="sl-host">{host}</span><span className="sl-path">{path}</span>
+        {" "}<span className="sl-arrow">→</span>
+        {" "}<span className={"sl-status " + statusCls(+status)}>{status}</span>
+        <span className="sl-ms"> · {ms}ms</span>
+      </span>
+    );
+  }
+  const r = meta.match(HTTP_REQ_RE);
+  if (r) {
+    const [, method, url] = r;
+    const { host, path } = splitUrl(url);
+    return (
+      <span className="sl-http">
+        {" "}<span className={"x-log-method" + (method === "GET" ? " get" : "")}>{method}</span>
+        {" "}<span className="sl-host">{host}</span><span className="sl-path">{path}</span>
+        {" "}<span className="sl-reqtag">req</span>
+      </span>
+    );
+  }
+  return null;
+}
+
 export default function SysLogPage() {
   const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
-  // 自动刷新偏好持久化（与请求日志页同模式）
-  const [auto, setAuto] = useState(() => localStorage.getItem("zsys-auto") === "1");
+  // 自动刷新偏好持久化：默认开，显式关过才默认关（关闸时不轮询）
+  const [auto, setAuto] = useState(() => localStorage.getItem("zsys-auto") !== "0");
   const toggleAuto = () => {
     const next = !auto;
     setAuto(next);
@@ -140,6 +191,10 @@ const clickNoSelect = (fn) => (e) => {
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
   const { meta, body } = splitLine(p.detail || p.raw);
+
+  // 单行视图：尝试结构化渲染 meta；若未命中 HTTP 行规则（touch-fail / cred-cooldown），回退 sl-detail 纯文本
+  const structuredMeta = HttpMeta({ meta });
+
   return (
     <div className={"x-log-item" + (open ? " expanded" : "")}>
       <div className={"sl-line clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
@@ -147,11 +202,18 @@ function TextRow({ p }) {
         <span className="x-log-ts">{p.ts}</span>
         {" "}<span className="sl-flow">[{p.flow}]</span>
         {" "}<span className="sl-event">{p.event}</span>
-        {" "}<span className="sl-detail">{p.detail}</span>
+        {" "}
+        {structuredMeta
+          ? <span className="sl-detail">{structuredMeta}</span>
+          : <span className="sl-detail">{p.detail}</span>
+        }
       </div>
       {open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
-            {meta ? <pre className="x-log-pre">{meta}</pre> : null}
+            {/* 展开视图：meta 也走结构化 pre */}
+            {meta
+              ? <pre className="x-log-pre">{structuredMeta ? String(structuredMeta) : meta}</pre>
+              : null}
             {body ? <pre className="x-log-pre">{prettyJson(body)}</pre> : null}
           </div>
         : null}
