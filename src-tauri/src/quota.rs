@@ -62,7 +62,7 @@ pub(crate) fn device_mid() -> Option<String> {
     CACHE
         .get_or_init(|| {
             let home = crate::store::pick_home(
-                std::env::var("ZCODE_SWITCH_HOME").ok().map(std::path::PathBuf::from),
+                crate::store::env_dir("ZCODE_HUB_HOME", "ZCODE_SWITCH_HOME"),
                 std::env::var("USERPROFILE").ok().map(std::path::PathBuf::from),
                 std::env::var("HOME").ok().map(std::path::PathBuf::from),
             );

@@ -57,14 +57,16 @@ pub(crate) fn pick_home(zswitch: Option<PathBuf>, userprofile: Option<PathBuf>, 
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn abs_env_path(name: &str) -> Option<PathBuf> {
-    let raw = std::env::var(name).ok()?;
-    let t = raw.trim();
-    if t.is_empty() {
-        return None;
-    }
-    let p = PathBuf::from(t);
+fn abs_env_path(name: &str, legacy: &str) -> Option<PathBuf> {
+    let p = env_dir(name, legacy)?;
     p.is_absolute().then_some(p)
+}
+
+/// 数据目录逃逸口。项目 2026-11 更名 zcode-switch → zcode-hub，环境变量随之改为
+/// ZCODE_HUB_*；旧名继续生效（读序：新名 → 旧名），已用旧名的脚本/部署不断。
+pub(crate) fn env_dir(name: &str, legacy: &str) -> Option<PathBuf> {
+    let read = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    read(name).or_else(|| read(legacy)).map(PathBuf::from)
 }
 
 fn bootstrap_data_base_dir(home: &Path) -> Option<PathBuf> {
@@ -78,13 +80,13 @@ fn bootstrap_data_base_dir(home: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn resolve_data_root(home: &Path) -> PathBuf {
-    if let Some(d) = abs_env_path("ZCODE_SWITCH_DATA_ROOT") {
+    if let Some(d) = abs_env_path("ZCODE_HUB_DATA_ROOT", "ZCODE_SWITCH_DATA_ROOT") {
         return d;
     }
     if let Some(d) = bootstrap_data_base_dir(home) {
         return d;
     }
-    if let Some(d) = abs_env_path("ZCODE_DATA_BASE_DIR") {
+    if let Some(d) = abs_env_path("ZCODE_DATA_BASE_DIR", "ZCODE_DATA_BASE_DIR") {
         return d;
     }
     home.to_path_buf()
@@ -93,7 +95,7 @@ pub(crate) fn resolve_data_root(home: &Path) -> PathBuf {
 impl Paths {
     pub fn detect() -> Paths {
         let home = pick_home(
-            std::env::var("ZCODE_SWITCH_HOME").ok().map(PathBuf::from),
+            env_dir("ZCODE_HUB_HOME", "ZCODE_SWITCH_HOME"),
             std::env::var("USERPROFILE").ok().map(PathBuf::from),
             std::env::var("HOME").ok().map(PathBuf::from),
         );
@@ -110,7 +112,7 @@ impl Paths {
         //      回滚 = 把 ~/.zcode-hub 改回 ~/.zcode-switch）
         //   两者都无 → 返回新目录（首装，ensure_dirs 创建）
         // 失败回退：改名失败（占用/权限）时读旧目录继续跑，下次启动重试。
-        // 逃逸口：ZCODE_SWITCH_DATA_ROOT / ZCODE_SWITCH_HOME 重定向路径不受迁移影响。
+        // 逃逸口：ZCODE_HUB_DATA_ROOT / ZCODE_HUB_HOME 重定向路径不受迁移影响（旧 ZCODE_SWITCH_* 名仍生效）。
         let new_dir = self.home.join(".zcode-hub");
         let old_dir = self.home.join(".zcode-switch");
         if new_dir.exists() {
@@ -352,7 +354,8 @@ pub fn write_live_config(paths: &Paths, v: &Value) -> Result<(), String> {
 }
 
 pub(crate) fn in_sandbox() -> bool {
-    std::env::var("ZCODE_SWITCH_HOME").is_ok()
+    // 设置过任一名字即 sandbox（含空串，与更名前语义一致）
+    std::env::var("ZCODE_HUB_HOME").is_ok() || std::env::var("ZCODE_SWITCH_HOME").is_ok()
 }
 
 #[cfg(windows)]
