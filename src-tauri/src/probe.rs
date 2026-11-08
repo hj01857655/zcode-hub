@@ -233,38 +233,35 @@ fn real_fetch(url: &str, token: &str, mid: Option<&str>) -> Result<Value, ProbeE
     let mut req = agent.get(url);
     if url.contains("zcode.z.ai") {
         for (k, v) in quota::zai_billing_headers_with_mid(token, mid.map(str::to_string)) {
-            req = req.set(&k, &v);
+            req = req.header(&k, &v);
         }
     } else {
         req = req
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("User-Agent", &format!("ZCode/{}", quota::zcode_app_version()))
-            .set("x-request-id", &uuid::Uuid::new_v4().to_string());
+            .header("Authorization", &format!("Bearer {token}"))
+            .header("User-Agent", &format!("ZCode/{}", quota::zcode_app_version()))
+            .header("x-request-id", &uuid::Uuid::new_v4().to_string());
     }
-    let resp = req.call().map_err(map_http_err)?;
-    let text = resp
-        .into_string()
-        .map_err(|e| ProbeErr::Other(e.to_string()))?;
+    let resp = req.call().map_err(|e| ProbeErr::Other(e.to_string()))?;
+    let (status, text) = crate::httplog::read_resp(resp).map_err(|e| ProbeErr::Other(e.to_string()))?;
+    if (400..600).contains(&status) {
+        return Err(map_http_status(status, &text));
+    }
     if text.is_empty() {
         return Ok(Value::Null);
     }
     Ok(serde_json::from_str(&text).unwrap_or(Value::String(text.clone())))
 }
 
-fn map_http_err(e: ureq::Error) -> ProbeErr {
-    match e {
-        ureq::Error::Status(code, r) => {
-            let body = r.into_string().unwrap_or_default();
-            if code == 401 || code == 403 {
-                return ProbeErr::Auth;
-            }
-            if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
-                    return ProbeErr::Auth;
-                }
-            }
-            ProbeErr::Other(format!("http {code}"))
-        }
-        other => ProbeErr::Other(other.to_string()),
+// 4xx/5xx 分流（3.x http_status_as_error(false) 后 HTTP 状态在 Ok(resp) 路径）：
+// 401/403 与 body 业务 401 都是登录态失效
+fn map_http_status(status: u16, body: &str) -> ProbeErr {
+    if status == 401 || status == 403 {
+        return ProbeErr::Auth;
     }
+    if let Ok(v) = serde_json::from_str::<Value>(body) {
+        if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
+            return ProbeErr::Auth;
+        }
+    }
+    ProbeErr::Other(format!("http {status}"))
 }

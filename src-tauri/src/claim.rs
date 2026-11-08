@@ -365,19 +365,23 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
     );
     let mut req = agent().get(&url);
     for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
-    let resp = req
-        .call()
-        .map_err(|e| {
-            let msg = http_err(&crate::i18n::tr("err.claim.touch_req"), e);
-            // 诊断摘要行：touch 拉取失败（429/3012 前哨/网络错）写 flowlog，
-            // 系统日志页可追溯「显示可领却领不了」「刷不出投放」类问题
-            crate::flowlog::log("claim", "touch-fail", &msg.split('\n').next().unwrap_or("").chars().take(120).collect::<String>());
-            msg
-        })?
-        .into_string()
+    let resp = req.call().map_err(|e| {
+        let msg = format!("{} {e}", crate::i18n::tr("err.claim.touch_req"));
+        // 诊断摘要行：touch 拉取失败（网络错）写 flowlog，
+        // 系统日志页可追溯「显示可领却领不了」「刷不出投放」类问题
+        crate::flowlog::log("claim", "touch-fail", &msg.split('\n').next().unwrap_or("").chars().take(120).collect::<String>());
+        msg
+    })?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        // 诊断摘要行：HTTP 4xx/5xx（429/3012 前哨）同样可追溯
+        let msg = crate::httplog::http_resp_err(&crate::i18n::tr("err.claim.touch_req"), status, &resp);
+        crate::flowlog::log("claim", "touch-fail", &msg.split('\n').next().unwrap_or("").chars().take(120).collect::<String>());
+        return Err(msg);
+    }
     let v: Value = serde_json::from_str(&resp)
         .map_err(|e| crate::i18n::trf("err.http.parse", &[("e", &e.to_string())]))?;
     let dels = v
@@ -486,23 +490,7 @@ fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, Strin
 }
 
 pub(crate) fn http_err(prefix: &str, e: ureq::Error) -> String {
-    if let ureq::Error::Status(code, resp) = e {
-        let body = resp.into_string().unwrap_or_default();
-        let msg = serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|v| ["msg", "message", "error"]
-                .iter()
-                .find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)))
-            .unwrap_or_default();
-        // 完整响应体附在第二行（截 750 字符保 UTF-8 边界）：前端 toast 收起显示短句，点开展开看全文
-        let body = body.trim();
-        if body.is_empty() {
-            return format!("{prefix} HTTP {code}: {msg}");
-        }
-        let cut = body.char_indices().nth(750).map(|(i, _)| i).unwrap_or(body.len());
-        let clipped = &body[..cut];
-        return format!("{prefix} HTTP {code}: {msg}\n{clipped}");
-    }
+    // 3.x：Err 只剩网络/协议层错误（4xx/5xx 走 Ok(resp)，由 httplog::http_resp_err 处理）
     format!("{prefix} {e}")
 }
 
@@ -525,53 +513,54 @@ pub fn submit_claim(
     // 领取版本头跟投放读取通道同档（探测值）：投放按 app_version 过滤，
     // 低一档自述会被服务端当「该档无此投放」→ 1004。详见 quota::zai_claim_headers_with_mid
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
-    req = req.set("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
+    req = req.header("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
     if let Some(r) = captcha_region.filter(|r| !r.trim().is_empty()) {
-        req = req.set("X-Aliyun-Captcha-Verify-Region", r.trim());
+        req = req.header("X-Aliyun-Captcha-Verify-Region", r.trim());
     }
     let claim_body = serde_json::json!({ "plan_id": plan_id });
-    crate::httplog::log_req_body(BILLING_CLAIM_URL, &claim_body);
-    let resp = req
-        .send_json(claim_body)
-        .map_err(|e| {
-            // 官方客户端语义（asar 实锤 tc()/Yde()）：全部响应 body 均为 JSON——
-            // 含 405+3012 拒绝（{"code":3012,"msg":...}）与 HTTP 429。错误分支
-            // 两条轨并行：http_status（HTTP 层）+ biz_code（body 的 code 字段），
-            // 前端退避按这两轨分流，不猜字符串
-            let (status, body) = match e {
-                ureq::Error::Status(code, r) => (i64::from(code), r.into_string().unwrap_or_default()),
-                _ => (0, String::new()),
-            };
-            let biz = serde_json::from_str::<Value>(&body)
-                .map(|v| parse_biz_code(&v))
-                .unwrap_or(-1);
-            // 消息构造对齐官方 Yde()：body JSON 的 error/message/msg/detail 字段
-            // 优先，WAF HTML 页（官方 wX 同款判据）回退 "HTTP {status}"
-            let msg = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|v| ["error", "message", "msg", "detail"]
-                    .iter()
-                    .find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)))
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| format!("HTTP {status}"));
-            ClaimError {
-                code: -1,
-                message: format!("{}: {msg}", crate::i18n::tr("err.claim.claim_req")),
-                next_at: None,
-                http_status: status,
-                biz_code: biz,
-            }
-        })?
-        .into_string()
-        .map_err(|e| ClaimError {
+    let resp = req.send_json(claim_body).map_err(|e| {
+        // 网络层错误（连接/超时）：无 HTTP 状态无响应体
+        ClaimError {
             code: -1,
-            message: crate::i18n::trf("err.http.read", &[("e", &e.to_string())]),
+            message: format!("{}: {e}", crate::i18n::tr("err.claim.claim_req")),
             next_at: None,
             http_status: 0,
             biz_code: -1,
-        })?;
+        }
+    })?;
+    let (status, resp) = crate::httplog::read_resp(resp).map_err(|e| ClaimError {
+        code: -1,
+        message: crate::i18n::trf("err.http.read", &[("e", &e.to_string())]),
+        next_at: None,
+        http_status: 0,
+        biz_code: -1,
+    })?;
+    if (400..600).contains(&status) {
+        // HTTP 4xx/5xx（405+3012 拒绝、HTTP 429）：错误分支两条轨并行——
+        // http_status（HTTP 层）+ biz_code（body 的 code 字段），前端退避按
+        // 这两轨分流，不猜字符串。消息构造对齐官方 Yde()：body JSON 的
+        // error/message/msg/detail 字段优先，WAF HTML 页（官方 wX 同款判据）
+        // 回退 "HTTP {status}"
+        let biz = serde_json::from_str::<Value>(&resp)
+            .map(|v| parse_biz_code(&v))
+            .unwrap_or(-1);
+        let msg = serde_json::from_str::<Value>(&resp)
+            .ok()
+            .and_then(|v| ["error", "message", "msg", "detail"]
+                .iter()
+                .find_map(|k| v.get(k).and_then(|x| x.as_str()).map(String::from)))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(ClaimError {
+            code: -1,
+            message: format!("{}: {msg}", crate::i18n::tr("err.claim.claim_req")),
+            next_at: None,
+            http_status: i64::from(status),
+            biz_code: biz,
+        });
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp.clone()));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     // 诊断 Kiro 式两行：请求行只有请求体（{plan_id}，无敏感内容全记），结果行
@@ -606,20 +595,25 @@ pub fn touch_report(
     let token = claim_token(creds, config, &secret)?;
     let mut req = agent().post(MARKETING_TOUCH_ACTION_URL);
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
     let action_body = serde_json::json!({
         "campaign_id": campaign_id,
         "action_type": action_type,
     });
-    crate::httplog::log_req_body(MARKETING_TOUCH_ACTION_URL, &action_body);
     let resp = req
-        .set("Content-Type", "application/json")
-        .timeout(std::time::Duration::from_secs(15))
+        .header("Content-Type", "application/json")
+        // 请求级超时 15s（桌面端同值）：覆盖 agent 档位
+        .config()
+        .timeout_per_call(Some(std::time::Duration::from_secs(15)))
+        .build()
         .send_json(action_body)
-        .map_err(|e| http_err("marketing/touch/action", e))?
-        .into_string()
+        .map_err(|e| http_err("marketing/touch/action", e))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::httplog::http_resp_err("marketing/touch/action", status, &resp));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::Null);
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     if code != 0 {
@@ -630,13 +624,16 @@ pub fn touch_report(
 
 pub fn fetch_captcha_config() -> Result<CaptchaConfig, String> {    let mut req = agent().get(CLIENT_CONFIGS_URL);
     for (k, v) in quota::zai_billing_headers("") {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
     let resp = req
         .call()
-        .map_err(|e| crate::i18n::trf("err.claim.config_req", &[("e", &e.to_string())]))?
-        .into_string()
+        .map_err(|e| crate::i18n::trf("err.claim.config_req", &[("e", &e.to_string())]))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::i18n::trf("err.claim.config_req", &[("e", &format!("http status {status}"))]));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     if v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) != 0 {
         return Err(crate::i18n::tr("err.claim.config_unavailable"));

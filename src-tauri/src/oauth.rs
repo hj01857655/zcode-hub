@@ -58,15 +58,17 @@ fn init_flow_at(url: &str, provider: &str, mid: &str) -> Result<FlowInit, String
     let agent = web_agent_with(20);
     let mut req = agent.post(url);
     for (k, v) in quota::zai_oauth_headers_with_mid(&poll_token, Some(mid.to_string())).0 {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
     let init_body = json!({ "provider": provider });
-    crate::httplog::log_req_body(url, &init_body);
     let resp = req
         .send_json(init_body)
-        .map_err(|e| crate::i18n::trf("err.oauth.init", &[("e", &e.to_string())]))?
-        .into_string()
         .map_err(|e| crate::i18n::trf("err.oauth.init", &[("e", &e.to_string())]))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
+        .map_err(|e| crate::i18n::trf("err.oauth.init", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::i18n::trf("err.oauth.init", &[("e", &format!("http status {status}"))]));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     let invalid = || crate::i18n::tr("err.oauth.init_invalid");
     if v.get("code").and_then(|c| c.as_i64()) != Some(0) {
@@ -131,24 +133,30 @@ pub fn poll_flow_once(url: &str, poll_token: &str, mid: &str) -> Result<PollOutc
     let agent = web_agent();
     let mut req = agent.get(url);
     for (k, v) in quota::zai_oauth_headers_with_mid(poll_token, Some(mid.to_string())).0 {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
+    // 网络错/读失败 → Pending（轮询是长驻流程，瞬时网络抖动不算终态）；
+    // 4xx（除 408/429）是终态：body code 3004 = flow 过期，其余按状态码报终态错
     let resp = match req.call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, resp)) if (400..500).contains(&code) && code != 408 && code != 429 => {
-            let body = resp.into_string().unwrap_or_default();
+        Err(_) => return Ok(PollOutcome::Pending),
+    };
+    let (status, body) = match crate::httplog::read_resp(resp) {
+        Ok(t) => t,
+        Err(_) => return Ok(PollOutcome::Pending),
+    };
+    // 4xx（除 408/429）是终态：body code 3004 = flow 过期；4xx 的 408/429 与
+    // 全部 5xx 同 2.x 的 Err(_) 语义 → Pending（服务端瞬时异常不算 flow 死亡）
+    if status >= 400 {
+        if (400..500).contains(&status) && status != 408 && status != 429 {
             let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             if v.get("code").and_then(|c| c.as_i64()) == Some(3004) {
                 return Err(crate::i18n::tr("err.oauth.expired"));
             }
-            return Err(crate::i18n::trf("err.oauth.poll_terminal", &[("code", &code.to_string())]));
+            return Err(crate::i18n::trf("err.oauth.poll_terminal", &[("code", &status.to_string())]));
         }
-        Err(_) => return Ok(PollOutcome::Pending),
-    };
-    let body = match resp.into_string() {
-        Ok(b) => b,
-        Err(_) => return Ok(PollOutcome::Pending),
-    };
+        return Ok(PollOutcome::Pending);
+    }
     let v: Value = serde_json::from_str(&body).unwrap_or(Value::String(body));
     let invalid = || crate::i18n::tr("err.oauth.poll_invalid");
     if v.get("code").and_then(|c| c.as_i64()) != Some(0) {
@@ -311,7 +319,7 @@ pub fn exchange_token(provider: &str, code: &str, state: &str, mid: &str) -> Res
         if k == "Authorization" {
             continue;
         }
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
     let exchange_body = json!({
         "provider": provider,
@@ -319,12 +327,14 @@ pub fn exchange_token(provider: &str, code: &str, state: &str, mid: &str) -> Res
         "redirect_uri": bridge_redirect_uri(),
         "state": state,
     });
-    crate::httplog::log_req_body(TOKEN_URL, &exchange_body);
     let resp = req
         .send_json(exchange_body)
-        .map_err(|e| crate::i18n::trf("err.oauth.exchange_req", &[("e", &e.to_string())]))?
-        .into_string()
+        .map_err(|e| crate::i18n::trf("err.oauth.exchange_req", &[("e", &e.to_string())]))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::i18n::trf("err.oauth.exchange_req", &[("e", &format!("http status {status}"))]));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     let code_n = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     if code_n != 0 {
@@ -395,13 +405,15 @@ pub fn fetch_userinfo(provider: &str, token: &str) -> Option<Value> {
     };
     let resp = web_agent()
         .get(url)
-        .set("Authorization", &auth)
-        .set("Content-Type", "application/json")
-        .set("User-Agent", LOGIN_WINDOW_UA)
+        .header("Authorization", &auth)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", LOGIN_WINDOW_UA)
         .call()
-        .ok()?
-        .into_string()
         .ok()?;
+    let (status, resp) = crate::httplog::read_resp(resp).ok()?;
+    if (400..600).contains(&status) {
+        return None;
+    }
     let v: Value = serde_json::from_str(&resp).ok()?;
     if v.get("code").and_then(|c| c.as_i64()).map(|c| c != 0).unwrap_or(false) {
         return None;
@@ -556,15 +568,17 @@ fn keys_array(v: &Value) -> Vec<&Value> {
 pub fn resolve_biz_api_key(base: &str, auth: &str, require_secret: bool) -> Option<String> {
     let agent = web_agent();
     let get_json = |url: &str| -> Option<Value> {
-        agent
+        let resp = agent
             .get(url)
-            .set("Authorization", auth)
-            .set("Content-Type", "application/json")
+            .header("Authorization", auth)
+            .header("Content-Type", "application/json")
             .call()
-            .ok()?
-            .into_string()
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .ok()?;
+        let (status, body) = crate::httplog::read_resp(resp).ok()?;
+        if (400..600).contains(&status) {
+            return None;
+        }
+        serde_json::from_str(&body).ok()
     };
     let cust = get_json(&format!("{base}/api/biz/customer/getCustomerInfo"))?;
     let (org, proj) = pick_org_project(&cust)?;
@@ -576,16 +590,17 @@ pub fn resolve_biz_api_key(base: &str, auth: &str, require_secret: bool) -> Opti
         .map(|k| k.clone());
     if found.is_none() {
         let key_body = json!({ "name": API_KEY_NAME });
-        crate::httplog::log_req_body(&keys_url, &key_body);
-        found = agent
+        let resp = agent
             .post(&keys_url)
-            .set("Authorization", auth)
-            .set("Content-Type", "application/json")
+            .header("Authorization", auth)
+            .header("Content-Type", "application/json")
             .send_json(key_body)
-            .ok()?
-            .into_string()
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok());
+            .ok()?;
+        let (status, body) = crate::httplog::read_resp(resp).ok()?;
+        if (400..600).contains(&status) {
+            return None;
+        }
+        found = serde_json::from_str(&body).ok();
     }
     let key = found
         .as_ref()
@@ -608,14 +623,15 @@ pub fn resolve_zai_business_token(zai_access_token: &str) -> Option<String> {
 
 fn resolve_zai_business_token_at(url: &str, zai_access_token: &str) -> Option<String> {
     let token_body = json!({ "token": zai_access_token });
-    crate::httplog::log_req_body(url, &token_body);
     let resp = web_agent()
         .post(url)
-        .set("Content-Type", "application/json")
+        .header("Content-Type", "application/json")
         .send_json(token_body)
-        .ok()?
-        .into_string()
         .ok()?;
+    let (status, resp) = crate::httplog::read_resp(resp).ok()?;
+    if (400..600).contains(&status) {
+        return None;
+    }
     let v: Value = serde_json::from_str(&resp).ok()?;
     ["access_token", "accessToken"]
         .iter()

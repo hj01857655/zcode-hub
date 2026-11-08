@@ -22,13 +22,16 @@ fn agent() -> ureq::Agent {
 fn get_json(url: &str, token: &str, mid: Option<String>) -> Result<Value, String> {
     let mut req = agent().get(url);
     for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
     let resp = req
         .call()
-        .map_err(|e| crate::claim::http_err(&crate::i18n::tr("err.referral.req"), e))?
-        .into_string()
+        .map_err(|e| crate::claim::http_err(&crate::i18n::tr("err.referral.req"), e))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::httplog::http_resp_err(&crate::i18n::tr("err.referral.req"), status, &resp));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     if code != 0 {
@@ -81,19 +84,21 @@ pub fn submit_bind(
     let token = claim_token(creds, config, &secret)?;
     let mut req = agent().post(REFERRAL_BIND_URL);
     for (k, v) in quota::zai_billing_headers_with_mid(&token, device_mid) {
-        req = req.set(&k, &v);
+        req = req.header(&k, &v);
     }
-    req = req.set("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
+    req = req.header("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
     if let Some(r) = captcha_region.filter(|r| !r.trim().is_empty()) {
-        req = req.set("X-Aliyun-Captcha-Verify-Region", r.trim());
+        req = req.header("X-Aliyun-Captcha-Verify-Region", r.trim());
     }
     let bind_body = serde_json::json!({ "invite_code": code });
-    crate::httplog::log_req_body(REFERRAL_BIND_URL, &bind_body);
     let resp = req
         .send_json(bind_body)
-        .map_err(|e| crate::claim::http_err(&crate::i18n::tr("err.referral.req"), e))?
-        .into_string()
+        .map_err(|e| crate::claim::http_err(&crate::i18n::tr("err.referral.req"), e))?;
+    let (status, resp) = crate::httplog::read_resp(resp)
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
+    if (400..600).contains(&status) {
+        return Err(crate::httplog::http_resp_err(&crate::i18n::tr("err.referral.req"), status, &resp));
+    }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp));
     let biz = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     if biz != 0 {
