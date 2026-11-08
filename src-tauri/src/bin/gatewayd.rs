@@ -26,6 +26,7 @@ fn main() {
                 .collect(),
         ),
         model_faces: std::sync::Mutex::new(std::collections::HashMap::new()),
+        proxies: zcode_hub_lib::gateway::proxy::ProxyPool::from_config(&cfg),
     });
     // sender 必须活到 block_on 返回：全部掉线会立即触发 graceful shutdown（实测进程秒退）
     let (tx, rx) = tokio::sync::watch::channel(false);

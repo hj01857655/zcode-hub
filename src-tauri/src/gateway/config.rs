@@ -48,6 +48,32 @@ pub struct GatewayConfig {
     /// 上游供应商清单（首个 = 默认上游，现有路由继续走它；结构为多上游预留）
     #[serde(default = "d_providers")]
     pub providers: Vec<ProviderConfig>,
+    /// 出网代理/池（405/3012 IP+指纹级风控的规避层）：mode=off 时零行为变化
+    #[serde(default)]
+    pub proxy: ProxyConfig,
+}
+
+/// 出网代理/池配置。Option 字段缺省语义：None = 用内置默认
+///（粘性=true、风控迁移=true、min_score=-2、风控冷却=45s）。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ProxyConfig {
+    /// off | single | pool（空串 = off）
+    #[serde(default)]
+    pub mode: String,
+    /// mode=single：单条代理串（http://u:p@host:port / socks5://…）
+    #[serde(default)]
+    pub single: String,
+    /// mode=pool：静态代理池
+    #[serde(default)]
+    pub proxies: Vec<String>,
+    /// 账号↔IP 粘性绑定（默认 true：跳 IP 本身是风控信号）
+    pub sticky_per_account: Option<bool>,
+    /// IP 级风控时账号迁移新出口（默认 true）
+    pub rotate_on_risk: Option<bool>,
+    /// 405/3012 迁移后的全局退避秒数（默认 45；设 0 = 维持 global_backoff_secs）
+    pub risk_backoff_secs: Option<u64>,
+    /// 出口健康分下限（默认 -2，触底踢出轮转）
+    pub min_score: Option<i32>,
 }
 
 /// 上游供应商：magpie 式供应商页的数据模型——条目可展开、可拉模型、可右键测试
@@ -110,6 +136,7 @@ impl Default for GatewayConfig {
             log_to_disk: d_true(),
             log_file_max_mb: d_log_max(),
             providers: d_providers(),
+            proxy: ProxyConfig::default(),
         }
     }
 }

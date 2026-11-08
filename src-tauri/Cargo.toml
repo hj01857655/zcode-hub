@@ -31,7 +31,7 @@ ureq = { version = "3", features = ["json", "rustls"] }
 sys-locale = "0.3"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks"] }
 bytes = "1"
 tokio-stream = "0.1"
 

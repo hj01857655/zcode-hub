@@ -197,6 +197,11 @@ pub fn is_user_concurrency_limit(body: &str) -> bool {
     body_code(body) == Some(3008)
 }
 
+/// IP 级并发上限（3009/3010）：出口健康归因用——负分但不迁移账号（瞬时负载非脏口）
+pub fn is_ip_conc_limit(body: &str) -> bool {
+    matches!(body_code(body), Some(3009 | 3010))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

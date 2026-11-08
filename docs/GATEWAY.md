@@ -60,6 +60,26 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 
 **成功率熔断（2026-11-01 落地，one-api 80%/10 同思路）**：`settle` 滚动记录每号最近 10 次收尾，错误率 ≥ 80% 即落 10 min 长冷却并清窗（覆盖单次短冷却压不住的慢性故障：3007 连发、持续 5xx）；冷却到期自动回池重新观察。前端池概览的「冷却剩余秒」直接复用，无新增展示。
 
+**出网代理池（2026-11-08 落地，语义对齐 ZCode2api-go `proxy.go`）**：405/3012 是 **IP+指纹级**风控——同出口持续撞会把整池拖进全局退避，单靠换号冷却无解。`proxy.rs` 出口池给每条出网链路独立 reqwest Client（http/socks5），账号池与之正交组合：
+
+- **账号↔出口粘性绑定**（`sticky_per_account` 默认开）：跳 IP 本身是风控信号；绑定存活直接复用，重分配挑绑定数最少的出口摊并发
+- **405/3012**（`on_risk`）：出口负分 + 进冷却窗口（`risk_backoff_secs` 默认 45s，同时作为全局退避缩短值）；`rotate_on_risk` 默认开，解绑该出口全部账号迁新口
+- **3009/3010**（`on_ip_conc`）：出口负分但账号不迁——瞬时负载，非脏口
+- **成功**（`mark_ok`）：负分回血，正分封顶 0（负分黏性保留）
+- 健康分 ≤ `min_score`（默认 -2）触底踢出；全部死透整池复位二次机会（绑定保留，出口恢复账号不跳）
+- `mode=off`（默认）不装配零行为变化；池随网关启动装配（`SvcState::new`），改 `gateway.json` 重启网关生效。单测 7 项覆盖（粘性均衡/风控迁移+冷却/并发档不迁/触底复位/回血封顶/off 与空配置/冷却到期）
+
+```json
+"proxy": {
+  "mode": "pool",
+  "proxies": ["http://user:pass@host:port", "socks5://user:pass@host:port"],
+  "sticky_per_account": true,
+  "rotate_on_risk": true,
+  "risk_backoff_secs": 45,
+  "min_score": -2
+}
+```
+
 **落地状态（2026-11-01）**：`pool.rs` 已实现（粘性游标 + 冷却表 + 全局退避 + 会话亲和 + 成功率熔断），`server.rs` 发送路径已接线；单测 13 项覆盖（粘性/亲和/熔断/缓存字段/SSE 聚合）。失败换号/冷却/全局退避路径未实测。
 
 ## 4. 模块分解（Rust 侧新增）
@@ -73,6 +93,8 @@ src-tauri/src/gateway/
   openai.rs     — OpenAI chat/completions ⇄ anthropic 唯一实现：tool_calls/视觉(data:image)/tool_result、
                   Delta 流式语义（translate_sse_line）+ 非流式聚合（aggregate_sse_to_openai）+ 流式装配器（OpenAiStream）
   pool.rs       — 多号轮询 + 冷却 + 全局退避（读 store 凭据，已接线 server.rs）
+  proxy.rs      — 出网代理池：账号↔出口粘性 + 风控迁移 + 健康计分（405/3012 IP 级风控规避层，
+                  语义对齐 ZCode2api-go proxy.go；mode=off 不装配）
   bin/gatewayd.rs — 无头启动入口：读 gateway.json（ZCODE_GATEWAY_PORT / ZCODE_GATEWAY_API_KEY 可覆盖），
                   不起 Tauri 直接 serve（e2e 验收 / 服务器部署用）
   upstream.rs   — z.ai messages 客户端（reqwest，非流式聚合 + bytes_stream 流式；冷却表）

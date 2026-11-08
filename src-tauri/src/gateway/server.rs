@@ -976,8 +976,16 @@ async fn pool_send(
         };
         let m = &members[idx];
         let t0 = std::time::Instant::now();
-        match upstream::messages_stream(&state.http, &m.token, m.mid.as_deref(), prepared).await {
+        // 出口选择：代理池按账号粘性取出口（mode=off / 未装配 → 基础客户端直连）
+        let http = match &state.shared.proxies {
+            Some(px) => px.client_for(&m.id).unwrap_or_else(|| state.http.clone()),
+            None => state.http.clone(),
+        };
+        match upstream::messages_stream(&http, &m.token, m.mid.as_deref(), prepared).await {
             Ok(resp) => {
+                if let Some(px) = &state.shared.proxies {
+                    px.mark_ok(&m.id); // 出口负分回血
+                }
                 // 记账延迟到消费点（SettleGuard）——响应头到达即释放会超发并发
                 return Ok(UpstreamOk {
                     reply: UpstreamReply::Stream(resp),
@@ -1008,6 +1016,12 @@ async fn pool_send(
                 } else {
                     state.shared.pool.settle(&m.id, idx, members.len(), false, cd, sticky);
                 }
+                // 出口健康归因（3009/3010 = IP 级并发档：瞬时负载，不迁移账号）
+                if upstream::is_ip_conc_limit(&up.body) {
+                    if let Some(px) = &state.shared.proxies {
+                        px.on_ip_conc(&m.id);
+                    }
+                }
                 // 错误摘要：body 截前 200 字符，展开详情用
                 let err_sum: String = up.body.chars().take(200).collect();
                 state.shared.push_log(json!({
@@ -1022,7 +1036,18 @@ async fn pool_send(
                 }));
                 upstream::note_risk_response(up.status, &up.body);
                 if upstream::is_global_risk(up.status, &up.body) {
-                    state.shared.pool.global_backoff(state.backoff_secs);
+                    // 出口归因：405/3012 = IP+指纹级风控——当前出口负分进冷却，
+                    // 绑定账号迁移新出口；有池可换时全局退避缩短（全池冻结 10min
+                    // 只在直连无替代出口时有意义）
+                    let mut backoff = state.backoff_secs;
+                    if let Some(px) = &state.shared.proxies {
+                        px.on_risk(&m.id);
+                        let rb = px.risk_backoff_secs();
+                        if rb > 0 && px.size() > 0 {
+                            backoff = rb;
+                        }
+                    }
+                    state.shared.pool.global_backoff(backoff);
                     // 风控对外一律 529 overloaded：405/3012 与请求方法、客户端鉴权无关
                     //（骑 200/400 均有实锤），透传原始状态会让客户端误判自己的请求错
                     return Err((
