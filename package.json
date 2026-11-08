@@ -1,7 +1,7 @@
 {
   "name": "zcode-hub",
   "private": true,
-  "version": "1.10.402",
+  "version": "1.10.403",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -5867,7 +5867,7 @@ dependencies = [
 
 [[package]]
 name = "zcode-hub"
-version = "1.10.402"
+version = "1.10.403"
 dependencies = [
  "aes-gcm",
  "axum",
