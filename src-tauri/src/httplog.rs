@@ -4,8 +4,9 @@
 //!
 //! 设计取舍（对比逐点插桩）：
 //! - ureq 2.12 的 Middleware 只暴露 URL/方法/状态/头，**拿不到请求体**（send_json
-//!   的载荷在中间件之后序列化），请求体由各调用点已有的 flowlog 行覆盖
-//!   （claim 的 plan_id、oauth 的 provider 等）；
+//!   的载荷在中间件之后序列化）。请求体走 log_req_body()：POST 类调用点发请求前
+//!   落一行 http-req（原文不打码——本地日志给自己排障看，脱敏反而碍事），
+//!   响应仍由中间件行覆盖，req 与 resp 不混行；
 //! - 响应体在中间件里可读：into_string() 消费连接后用 Response::new 重建一个
 //!   等价响应传回调用方——调用方拿到的仍是完整体，无感；
 //! - 只有声明了 `x-no-httplog` 头的调用点跳过记录（预留给探针/压测类高频请求）。
@@ -51,8 +52,8 @@ fn flow_of(url: &str) -> &'static str {
 }
 
 /// Kiro 式结果行：「{method} {path} → status ms resp」——请求标识 + 箭头结果 +
-/// 内联响应体（截 2K），一行独立可读；请求体由各调用点已有行覆盖（中间件拿不到，
-/// 见文件头注释），req 与 resp 永不混行。
+/// 内联响应体（截 2K），一行独立可读；请求体由调用点发请求前经 log_req_body()
+/// 落独立行，req 与 resp 永不混行。
 fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
     let event = if (200..300).contains(&status) { "http-ok" } else { "http-err" };
     flowlog::log(
@@ -62,6 +63,20 @@ fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, 
             "{method} {} → {status} ms={elapsed_ms} resp={}",
             short_url(url),
             clip(body, RESP_CAP)
+        ),
+    );
+}
+
+/// 请求体落行（POST 类调用点在 send_json 前调）：「POST {path} req={json}」
+/// 原文落盘；响应仍由中间件行覆盖。flow 归类与中间件同规则。
+pub fn log_req_body(url: &str, body: &serde_json::Value) {
+    flowlog::log(
+        flow_of(url),
+        "http-req",
+        &format!(
+            "POST {} req={}",
+            short_url(url),
+            body
         ),
     );
 }

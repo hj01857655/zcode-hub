@@ -41,6 +41,12 @@ html, body {
   font-size: 16.5px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  /* 全局可选中复制（日志/账号/额度文本随手可抄）；交互控件在各自规则里反向豁免 */
+  user-select: text;
+}
+
+/* 反向豁免：纯交互件不进选区——按钮/下拉/开关/拖拽柄/树 caret/侧栏导航 */
+button, select, .tog-inline, .side-item, .acc-grip, .x-pool-caret, .x-log-row.tree-group {
   user-select: none;
 }
 
@@ -597,7 +603,7 @@ input:focus-visible,
   padding: 7px 10px;
 }
 .settings input:focus { outline: none; border-color: var(--amber-deep); }
-/* 密钥与调用示例要能选中复制：全局 user-select:none 的豁免 */
+/* 密钥与调用示例显式 text + text 光标（全局本已可选中，这里强调可抄的语义） */
 .settings .hint code,
 .x-curl { user-select: text; cursor: text; }
 .settings .hint {

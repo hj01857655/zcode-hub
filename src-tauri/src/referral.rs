@@ -87,8 +87,10 @@ pub fn submit_bind(
     if let Some(r) = captcha_region.filter(|r| !r.trim().is_empty()) {
         req = req.set("X-Aliyun-Captcha-Verify-Region", r.trim());
     }
+    let bind_body = serde_json::json!({ "invite_code": code });
+    crate::httplog::log_req_body(REFERRAL_BIND_URL, &bind_body);
     let resp = req
-        .send_json(serde_json::json!({ "invite_code": code }))
+        .send_json(bind_body)
         .map_err(|e| crate::claim::http_err(&crate::i18n::tr("err.referral.req"), e))?
         .into_string()
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;

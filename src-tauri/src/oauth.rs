@@ -60,8 +60,10 @@ fn init_flow_at(url: &str, provider: &str, mid: &str) -> Result<FlowInit, String
     for (k, v) in quota::zai_oauth_headers_with_mid(&poll_token, Some(mid.to_string())).0 {
         req = req.set(&k, &v);
     }
+    let init_body = json!({ "provider": provider });
+    crate::httplog::log_req_body(url, &init_body);
     let resp = req
-        .send_json(json!({ "provider": provider }))
+        .send_json(init_body)
         .map_err(|e| crate::i18n::trf("err.oauth.init", &[("e", &e.to_string())]))?
         .into_string()
         .map_err(|e| crate::i18n::trf("err.oauth.init", &[("e", &e.to_string())]))?;
@@ -311,13 +313,15 @@ pub fn exchange_token(provider: &str, code: &str, state: &str, mid: &str) -> Res
         }
         req = req.set(&k, &v);
     }
+    let exchange_body = json!({
+        "provider": provider,
+        "code": code,
+        "redirect_uri": bridge_redirect_uri(),
+        "state": state,
+    });
+    crate::httplog::log_req_body(TOKEN_URL, &exchange_body);
     let resp = req
-        .send_json(json!({
-            "provider": provider,
-            "code": code,
-            "redirect_uri": bridge_redirect_uri(),
-            "state": state,
-        }))
+        .send_json(exchange_body)
         .map_err(|e| crate::i18n::trf("err.oauth.exchange_req", &[("e", &e.to_string())]))?
         .into_string()
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;
@@ -571,11 +575,13 @@ pub fn resolve_biz_api_key(base: &str, auth: &str, require_secret: bool) -> Opti
         .find(|k| k.get("name").and_then(|n| n.as_str()) == Some(API_KEY_NAME))
         .map(|k| k.clone());
     if found.is_none() {
+        let key_body = json!({ "name": API_KEY_NAME });
+        crate::httplog::log_req_body(&keys_url, &key_body);
         found = agent
             .post(&keys_url)
             .set("Authorization", auth)
             .set("Content-Type", "application/json")
-            .send_json(json!({ "name": API_KEY_NAME }))
+            .send_json(key_body)
             .ok()?
             .into_string()
             .ok()
@@ -601,10 +607,12 @@ pub fn resolve_zai_business_token(zai_access_token: &str) -> Option<String> {
 }
 
 fn resolve_zai_business_token_at(url: &str, zai_access_token: &str) -> Option<String> {
+    let token_body = json!({ "token": zai_access_token });
+    crate::httplog::log_req_body(url, &token_body);
     let resp = web_agent()
         .post(url)
         .set("Content-Type", "application/json")
-        .send_json(json!({ "token": zai_access_token }))
+        .send_json(token_body)
         .ok()?
         .into_string()
         .ok()?;

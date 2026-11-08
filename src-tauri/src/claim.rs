@@ -531,8 +531,10 @@ pub fn submit_claim(
     if let Some(r) = captcha_region.filter(|r| !r.trim().is_empty()) {
         req = req.set("X-Aliyun-Captcha-Verify-Region", r.trim());
     }
+    let claim_body = serde_json::json!({ "plan_id": plan_id });
+    crate::httplog::log_req_body(BILLING_CLAIM_URL, &claim_body);
     let resp = req
-        .send_json(serde_json::json!({ "plan_id": plan_id }))
+        .send_json(claim_body)
         .map_err(|e| {
             // 官方客户端语义（asar 实锤 tc()/Yde()）：全部响应 body 均为 JSON——
             // 含 405+3012 拒绝（{"code":3012,"msg":...}）与 HTTP 429。错误分支
@@ -606,13 +608,15 @@ pub fn touch_report(
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
         req = req.set(&k, &v);
     }
+    let action_body = serde_json::json!({
+        "campaign_id": campaign_id,
+        "action_type": action_type,
+    });
+    crate::httplog::log_req_body(MARKETING_TOUCH_ACTION_URL, &action_body);
     let resp = req
         .set("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(15))
-        .send_json(serde_json::json!({
-            "campaign_id": campaign_id,
-            "action_type": action_type,
-        }))
+        .send_json(action_body)
         .map_err(|e| http_err("marketing/touch/action", e))?
         .into_string()
         .map_err(|e| crate::i18n::trf("err.http.read", &[("e", &e.to_string())]))?;

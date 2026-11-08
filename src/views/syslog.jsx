@@ -26,11 +26,13 @@ function parseTextLine(line) {
 const ERR_EVENTS = ["fail", "error", "timeout", "corrupt", "downgraded"];
 const isErrEvent = (event) => ERR_EVENTS.some((k) => event.includes(k));
 
-// 行拆分：resp= 是 detail 最后一段——之前是请求/结果元数据，之后是响应体；
-// 体是 JSON 就缩进格式化（落盘时空白已压平，parse 不受影响），不是就原样。
-// 请求行与响应体分开渲染——请求是行，响应也是行，不拼在一起
+// 行拆分：req=/resp= 是 detail 尾部锚点——http-req 行以 req= 收尾、中间件结果行
+// 以 resp= 收尾，各自把行切成「元信息 + JSON 体」两段；体是 JSON 就缩进格式化
+// （落盘时空白已压平，parse 不受影响），不是就原样。请求行与响应体分开渲染。
+// 已知边界：体内容里再出现 req=/resp= 字样时 lastIndexOf 切错位，只影响展开视图
+// 的归属显示，不丢行不崩溃
 function splitLine(detail) {
-  const i = detail.lastIndexOf("resp=");
+  const i = Math.max(detail.lastIndexOf("resp="), detail.lastIndexOf("req="));
   if (i === -1) return { meta: detail, body: "" };
   return { meta: detail.slice(0, i).trimEnd(), body: detail.slice(i + 5).trim() };
 }
@@ -128,13 +130,20 @@ export default function SysLogPage() {
 // 错误行整体标红。默认单行省略，点击展开分块打全——meta 一行、resp 响应体 JSON 缩进
 // 格式化，各自独立成块；2K 级响应体只在展开视图读，列表保持日志流的滚动密度。
 // hover title 移除——2K 级响应体在气泡里看不了，点击展开才是唯一正确读法
+// 有选区时不触发展开——拖选文本松开鼠标的 click 事件不能与「点击展开/收起」互相打架，
+// 纯点击（无选中文字）才 toggle
+const clickNoSelect = (fn) => (e) => {
+  if (window.getSelection()?.toString()) return;
+  fn(e);
+};
+
 function TextRow({ p }) {
   const [open, setOpen] = useState(false);
   const { meta, body } = splitLine(p.detail || p.raw);
   return (
     <div className={"x-log-item" + (open ? " expanded" : "")}>
       <div className={"sl-line clickable" + (isErrEvent(p.event) ? " sl-err" : "")}
-        onClick={() => setOpen(!open)}>
+        onClick={clickNoSelect(() => setOpen(!open))}>
         <span className="x-log-ts">{p.ts}</span>
         {" "}<span className="sl-flow">[{p.flow}]</span>
         {" "}<span className="sl-event">{p.event}</span>
