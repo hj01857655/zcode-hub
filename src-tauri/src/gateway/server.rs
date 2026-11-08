@@ -955,7 +955,7 @@ async fn pool_send(
                     //（骑 200/400 均有实锤），透传原始状态会让客户端误判自己的请求错
                     return Err((
                         StatusCode::from_u16(529).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
-                        api_error_id("overloaded_error", &up.body, req_id),
+                        upstream_error_body("overloaded_error", &up.body, req_id),
                     ));
                 }
                 if attempt < state.max_retries as usize && upstream::is_retryable(up.status, &up.body) {
@@ -967,7 +967,7 @@ async fn pool_send(
                     external_status(up.status).unwrap_or((up.status, "upstream_error"));
                 return Err((
                     StatusCode::from_u16(ext_status).unwrap_or(StatusCode::BAD_GATEWAY),
-                    api_error_id(ext_typ, &up.body, req_id),
+                    upstream_error_body(ext_typ, &up.body, req_id),
                 ));
             }
         }
@@ -1001,6 +1001,41 @@ fn external_status(status: u16) -> Option<(u16, &'static str)> {
         405 => Some((529, "overloaded_error")),
         _ => None,
     }
+}
+
+/// 对外 error 体字段提取：上游 body 是 JSON 时取业务 code（顶层优先，其次 error 内层，
+/// 字符串数字也收）与 msg/message 正文；非 JSON（WAF HTML 页等）message 原样截断、
+/// 无 code。口径与 upstream.rs body_code 对齐——那边是私有实现且该文件不在本线改动
+/// 范围（另一会话未提交），这里自带轻量版。
+fn external_error_fields(body: &str) -> (Option<i64>, String) {
+    let clipped = || body.trim().chars().take(200).collect::<String>();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim()) else {
+        return (None, clipped());
+    };
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| v.get(*k))
+            .or_else(|| v.get("error").and_then(|e| keys.iter().find_map(|k| e.get(*k))))
+    };
+    let code = pick(&["code"])
+        .and_then(|c| c.as_i64().or_else(|| c.as_str().and_then(|s| s.parse::<i64>().ok())));
+    let msg = pick(&["msg", "message"])
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty());
+    (code, msg.unwrap_or_else(clipped))
+}
+
+/// 上游错误 → 对外 error 体：type 由调用方定（external_status 归一化档或透传档），
+/// message 取上游 body 的 msg/message 正文（不再整段塞原始 JSON），业务 code 随
+/// error 对象透出——SDK 按状态码与 type 归类，多余字段忽略。
+fn upstream_error_body(typ: &str, up_body: &str, req_id: &str) -> Json<Value> {
+    let (code, message) = external_error_fields(up_body);
+    let mut body = api_error_id(typ, &message, req_id);
+    if let Some(c) = code {
+        body.0["error"]["code"] = json!(c);
+    }
+    body
 }
 
 /// /v1/responses（M4/M5）：OpenAI Responses 入站 → anthropic 上游。
@@ -1150,5 +1185,33 @@ mod tests {
         assert_eq!(external_status(502), None);
         // 529 非 IANA 注册码：http crate 接受 100..=999，钉住这个前提
         assert!(StatusCode::from_u16(529).is_ok());
+    }
+
+    /// 对外 error 体：message 取上游 msg/message 正文，业务 code 随 error 对象透出
+    #[test]
+    fn error_body_surfaces_upstream_code_and_msg() {
+        let (code, msg) = external_error_fields(
+            r#"{"code":1005,"msg":"exceed quota limit","logid":"2026110803012724a1e2abbaf1a20f6b92"}"#,
+        );
+        assert_eq!(code, Some(1005));
+        assert_eq!(msg, "exceed quota limit");
+        // error 内层形态
+        let (code, msg) = external_error_fields(r#"{"error":{"code":3004,"message":"flow expired"}}"#);
+        assert_eq!(code, Some(3004));
+        assert_eq!(msg, "flow expired");
+        // 非 JSON（WAF HTML 页）原样截断、无 code
+        let (code, msg) = external_error_fields("<html>blocked by WAF</html>");
+        assert_eq!(code, None);
+        assert_eq!(msg, "<html>blocked by WAF</html>");
+        // 组装出口：type 过归一化档、code 带入 error 对象
+        let body = upstream_error_body(
+            "rate_limit_error",
+            r#"{"code":1005,"msg":"exceed quota limit"}"#,
+            "req123",
+        );
+        assert_eq!(body.0["error"]["type"], "rate_limit_error");
+        assert_eq!(body.0["error"]["code"], 1005);
+        assert_eq!(body.0["error"]["message"], "exceed quota limit");
+        assert_eq!(body.0["error"]["req_id"], "req123");
     }
 }

@@ -54,7 +54,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 
 策略：失败换下一号，冷却期内跳过；全部耗尽回 503。`window_test.go` 里有窗口调度测试，Rust 版同构。
 
-**对外状态码归一化（2026-11-08）**：客户端是 Anthropic SDK、按状态码归类重试与报错文案，`pool_send` 错误出口统一过 `server.rs external_status`——上游 200 包业务错（1005 额度耗尽）→ 429 `rate_limit_error`（透传 200 会让 Claude Code 把 error JSON 当响应体解析，表现「流提前结束」，11-02 挂账本日清）；401/403 → 503 `api_error`（上游号 token 死 ≠ 客户端鉴权失败，透传 401 会触发客户端重新登录提示）；405/3012 风控 → 529 `overloaded_error`（Anthropic 官方容量档，SDK 原生识别，客户端指数退避正好等全局退避过期）；429/400/5xx/0 语义成立透传。流中截断的 200+overloaded 合成事件与池侧 503 不变。
+**对外状态码归一化（2026-11-08）**：客户端是 Anthropic SDK、按状态码归类重试与报错文案，`pool_send` 错误出口统一过 `server.rs external_status`——上游 200 包业务错（1005 额度耗尽）→ 429 `rate_limit_error`（透传 200 会让 Claude Code 把 error JSON 当响应体解析，表现「流提前结束」，11-02 挂账本日清）；401/403 → 503 `api_error`（上游号 token 死 ≠ 客户端鉴权失败，透传 401 会触发客户端重新登录提示）；405/3012 风控 → 529 `overloaded_error`（Anthropic 官方容量档，SDK 原生识别，客户端指数退避正好等全局退避过期）；429/400/5xx/0 语义成立透传。流中截断的 200+overloaded 合成事件与池侧 503 不变。对外 error 体（同日二补）：message 取上游 body 的 `msg`/`message` 正文（非 JSON 原样截断），业务 `code` 随 error 对象透出（SDK 忽略未知字段），原始 body 不再整段塞进 message——`server.rs upstream_error_body` 统一出口。
 
 **会话亲和（2026-11-01 落地）**：请求带 `x-session-id` / `x-claude-code-session-id` / `x-litellm-session-id` 头（或 body `metadata.session_id`/`metadata.user_id`）即钉同号（`pool.rs` `Sticky::Session`，独立于全局粘性开关——轮换模式下多会话照样分摊，单会话内驻留吃上游 prompt cache）。pin TTL 30 min 命中刷新，表上限 512 丢最旧一半；失败解钉换号。多客户端各自带 session 时互不冲号。
 
