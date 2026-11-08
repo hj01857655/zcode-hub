@@ -471,6 +471,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
     } else {
         bigmodel_headers(token)
     };
+    let req_hdrs = crate::httplog::headers_for_log_pairs(&headers);
     let mut last_err: Option<String> = None;
     let mut backoff: std::slice::Iter<'_, u64> = if retry_429 { retry_delays.iter() } else { [].iter() };
     loop {
@@ -486,7 +487,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             // HTTP 层 4xx/5xx：诊断行 + 业务 401（body code）→ 冷却、429 → 退避重试、
             // 401/403 → 冷却，其余按响应 msg 报错。JSONL 诊断行走结构化 API，
             // 与 httplog middleware 行同 schema（body 截断策略同 body_for_log）
-            crate::flowlog::log_http(
+            crate::flowlog::log_http_with_headers(
                 "sys",
                 "http-err",
                 "GET",
@@ -494,6 +495,8 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                 Some(status),
                 Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
                 Some(crate::httplog::body_for_log(&text)),
+                Some(&req_hdrs),
+                None,
             );
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
@@ -533,7 +536,7 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
             mark_cred_cooldown(token);
         }
         if !business_ok(&serde_json::from_str::<Value>(&text).unwrap_or(Value::Null)) || biz_code != 0 {
-            crate::flowlog::log_http(
+            crate::flowlog::log_http_with_headers(
                 "sys",
                 "http-ok-biz",
                 "GET",
@@ -541,6 +544,8 @@ fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> 
                 Some(status),
                 Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
                 Some(crate::httplog::body_for_log(&text)),
+                Some(&req_hdrs),
+                None,
             );
         }
         return Ok(if text.is_empty() {

@@ -18,7 +18,9 @@ pub fn init(base: &Path) {
 /// 单行日志的 JSONL 形态：公共字段 ts/flow/event + 互斥负载——普通事件走
 /// detail（单字符串），HTTP 事件走 method/url/status/ms/body 五字段（body 恒为
 /// wire 原文的转义字符串，不做嵌套 JSON 对象：保留上游键序/空白形态作排障
-/// 证据，且非 JSON 体（WAF HTML/网络错文本）与合法 JSON 类型统一）。
+/// 证据，且非 JSON 体（WAF HTML/网络错文本）与合法 JSON 类型统一）；请求/响应
+/// 头为原样紧凑字符串（见 httplog::headers_for_log），仅做体量上限不脱敏——
+/// 本地日志的头形态是风控排障证据。
 /// None 字段跳过序列化，行内只出现实际有值的键。
 #[derive(serde::Serialize)]
 struct LogLine<'a> {
@@ -31,6 +33,10 @@ struct LogLine<'a> {
     method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    req_headers: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    res_headers: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +58,8 @@ pub fn log(flow: &str, event: &str, detail: &str) {
         detail: (!detail.is_empty()).then_some(detail),
         method: None,
         url: None,
+        req_headers: None,
+        res_headers: None,
         status: None,
         ms: None,
         body: None,
@@ -61,7 +69,6 @@ pub fn log(flow: &str, event: &str, detail: &str) {
 /// HTTP 事件专用落行（status/ms/body 可选：请求行 http-req 只有 method/url/body，
 /// 网络错行 status=0 无 body，正常响应行全量）。调用方负责 body 的截断策略
 /// （见 httplog::body_for_log），本层只管结构与转义。
-#[allow(clippy::too_many_arguments)]
 pub fn log_http(
     flow: &str,
     event: &str,
@@ -71,6 +78,23 @@ pub fn log_http(
     ms: Option<u64>,
     body: Option<&str>,
 ) {
+    log_http_with_headers(flow, event, method, url, status, ms, body, None, None);
+}
+
+/// 带请求/响应头的落行变体：头字符串由调用方序列化（见 httplog::headers_for_log），
+/// 本层不接触原始头值。中间件走这里，quota 裸链与手动落行走 log_http。
+#[allow(clippy::too_many_arguments)]
+pub fn log_http_with_headers(
+    flow: &str,
+    event: &str,
+    method: &str,
+    url: &str,
+    status: Option<u16>,
+    ms: Option<u64>,
+    body: Option<&str>,
+    req_headers: Option<&str>,
+    res_headers: Option<&str>,
+) {
     append_line(&LogLine {
         ts: now_ts(),
         flow,
@@ -78,6 +102,8 @@ pub fn log_http(
         detail: None,
         method: Some(method),
         url: Some(url),
+        req_headers,
+        res_headers,
         status,
         ms,
         body,

@@ -1,8 +1,9 @@
 //! HTTP 请求统一记录层：ureq 3.x Middleware 挂在共享 Agent 上，全仓 HTTP 调用
 //! （claim/touch/balance/oauth/token/referral 等全部 zcode 上游接口）自动落
-//! flowlog——JSONL 行（ts/flow/event + method/url/status/ms/body 五字段，见
-//! flowlog::log_http），body 恒为 wire 原文转义字符串（JSON 全量、非 JSON 截
-//! 2K，见 body_for_log），系统日志页可查。
+//! flowlog——JSONL 行（ts/flow/event + method/url/status/ms/body + 请求/响应头
+//! 两字段，见 flowlog::log_http_with_headers），body 恒为 wire 原文转义字符串
+//!（JSON 全量、非 JSON 截 2K，见 body_for_log），头原样落盘仅封体量，系统日志
+//! 页可查。
 //!
 //! ureq 3.x 相比 2.x 的关键差异（本仓迁移决策的依据）：
 //! - middleware 收到 http::Request<SendBody>，请求体在链上可读（2.x 的 Request
@@ -57,6 +58,49 @@ fn short_url(url: &str) -> String {
     url.split("://").last().unwrap_or(url).to_string()
 }
 
+const HEADER_VALUE_CAP: usize = 160;
+const HEADERS_CAP: usize = 2048;
+
+/// 把头序列化为紧凑串 `k=v; k=v`，全量原样落（含 Authorization/Cookie/
+/// 签名头）——本地日志只在用户机器上，头形态（尤其上游要求的签名/版本头）是
+/// 风控排障的核心证据，脱敏后就没法对照。仅做体量控制：单值按字符边界截
+/// HEADER_VALUE_CAP、整串封 HEADERS_CAP，防超长头撑爆单行日志。
+fn push_header(out: &mut String, k: &str, raw: &str) {
+    let k = k.to_ascii_lowercase();
+    let cut = raw.char_indices().nth(HEADER_VALUE_CAP).map(|(i, _)| i).unwrap_or(raw.len());
+    if !out.is_empty() {
+        out.push_str("; ");
+    }
+    out.push_str(&k);
+    out.push('=');
+    out.push_str(&raw[..cut]);
+}
+
+fn headers_for_log(headers: &ureq::http::HeaderMap) -> String {
+    let mut out = String::new();
+    for (name, value) in headers.iter() {
+        push_header(&mut out, name.as_str(), &String::from_utf8_lossy(value.as_bytes()));
+        if out.len() >= HEADERS_CAP {
+            break;
+        }
+    }
+    out
+}
+
+/// quota 裸链用：其请求头是本地 Vec<(String,String)> 而非 HeaderMap（自建 Agent
+/// 不挂 middleware），序列化规则与 headers_for_log 一致。响应头在该链不可得
+///（read_resp 消耗 resp），只落请求头。
+pub(crate) fn headers_for_log_pairs(headers: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (k, v) in headers {
+        push_header(&mut out, k, v);
+        if out.len() >= HEADERS_CAP {
+            break;
+        }
+    }
+    out
+}
+
 /// flow 记录：按 URL 域名归类——zcode.z.ai/billing、marketing → claim 流；
 /// api.z.ai / bigmodel.cn 的 oauth/token 类 → oauth 流；其余 → sys
 fn flow_of(url: &str) -> &'static str {
@@ -69,11 +113,20 @@ fn flow_of(url: &str) -> &'static str {
     }
 }
 
-/// 结果行：JSONL 结构化字段（method/url/status/ms/body），body 走 body_for_log
-/// 截断策略；请求行（http-req）同走 flowlog::log_http，无 status/ms。
-fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, flow: &'static str) {
+/// 结果行：JSONL 结构化字段（method/url/status/ms/body + 两侧脱敏头），body 走
+/// body_for_log 截断策略。网络错行 status=0 无响应头/体。
+fn log_http(
+    method: &str,
+    url: &str,
+    status: u16,
+    body: &str,
+    elapsed_ms: u128,
+    flow: &'static str,
+    req_headers: Option<&str>,
+    res_headers: Option<&str>,
+) {
     let event = if (200..300).contains(&status) { "http-ok" } else { "http-err" };
-    flowlog::log_http(
+    flowlog::log_http_with_headers(
         flow,
         event,
         method,
@@ -81,6 +134,8 @@ fn log_http(method: &str, url: &str, status: u16, body: &str, elapsed_ms: u128, 
         Some(status),
         Some(elapsed_ms.min(u64::MAX as u128) as u64),
         Some(body_for_log(body)),
+        req_headers,
+        res_headers,
     );
 }
 
@@ -99,10 +154,12 @@ impl Middleware for HttpLogMw {
         let method = parts.method.as_str().to_string();
         let url = parts.uri.to_string();
         let flow = flow_of(&url);
+        // 脱敏头快照必须在重建前取（parts 之后被移入 Request::from_parts）
+        let req_hdrs = headers_for_log(&parts.headers);
         let mut buf = Vec::new();
         body.into_reader().read_to_end(&mut buf).map_err(ureq::Error::from)?;
         if !buf.is_empty() {
-            flowlog::log_http(
+            flowlog::log_http_with_headers(
                 flow,
                 "http-req",
                 &method,
@@ -110,6 +167,8 @@ impl Middleware for HttpLogMw {
                 None,
                 None,
                 Some(body_for_log(&String::from_utf8_lossy(&buf))),
+                Some(&req_hdrs),
+                None,
             );
         }
         let send_body = if buf.is_empty() {
@@ -129,15 +188,17 @@ impl Middleware for HttpLogMw {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let (rp, mut rb) = resp.into_parts();
+                let res_hdrs = headers_for_log(&rp.headers);
                 match rb.read_to_string() {
                     Ok(text) => {
-                        log_http(&method, &url, status, &text, t0.elapsed().as_millis(), flow);
+                        log_http(&method, &url, status, &text, t0.elapsed().as_millis(), flow,
+                            Some(&req_hdrs), Some(&res_hdrs));
                         let body = Body::builder().data(text.into_bytes());
                         Ok(Response::from_parts(rp, body))
                     }
                     Err(e) => {
                         // 读失败（>10MB limit / 连接中断）：记错误行，调用方按网络错处理
-                        flowlog::log_http(
+                        flowlog::log_http_with_headers(
                             flow,
                             "http-err",
                             &method,
@@ -145,6 +206,8 @@ impl Middleware for HttpLogMw {
                             Some(status),
                             Some(t0.elapsed().as_millis().min(u64::MAX as u128) as u64),
                             Some(&format!("resp read failed: {e}")),
+                            Some(&req_hdrs),
+                            Some(&res_hdrs),
                         );
                         Err(ureq::Error::from(e))
                     }
@@ -152,7 +215,8 @@ impl Middleware for HttpLogMw {
             }
             Err(e) => {
                 // 网络层错误（连接拒绝/DNS 失败/超时）：无响应体可记，记元信息
-                log_http(&method, &url, 0, &e.to_string(), t0.elapsed().as_millis(), flow);
+                log_http(&method, &url, 0, &e.to_string(), t0.elapsed().as_millis(), flow,
+                    Some(&req_hdrs), None);
                 Err(e)
             }
         }
@@ -323,6 +387,9 @@ mod tests {
         let agent = logged_agent(5);
         let resp = agent
             .post(format!("http://{addr}/test"))
+            // 塞一个 Bearer 凭据，实证脱敏：日志里不得出现明文 token
+            .header("Authorization", "Bearer SECRET_TOKEN_MUST_NOT_LEAK")
+            .header("X-ZCode-App-Version", "3.17.2")
             .send_json(serde_json::json!({ "a": 1 }))
             .unwrap();
         let (status, body) = read_resp(resp).unwrap();
@@ -352,6 +419,15 @@ mod tests {
         assert!(ok_line["body"].as_str().unwrap().contains("\"code\":0"), "resp body lost: {ok_line}");
         // 请求/响应行互斥字段：req 行无 status/ms，resp 行齐备
         assert!(req_line.get("status").is_none() && req_line.get("ms").is_none());
+        // 头采集契约：请求/响应头原样落盘（含 Authorization 明文），头形态是
+        // 风控排障证据；仅做体量上限，不做脱敏
+        let rh = req_line["req_headers"].as_str().unwrap_or("");
+        assert!(rh.contains("x-zcode-app-version=3.17.2"), "req headers lost: {rh}");
+        assert!(rh.contains("authorization=Bearer SECRET_TOKEN_MUST_NOT_LEAK"),
+            "authorization header lost: {rh}");
+        assert!(log.contains("SECRET_TOKEN_MUST_NOT_LEAK"), "token not logged!");
+        assert!(ok_line["res_headers"].as_str().unwrap_or("").contains("content-type"),
+            "res headers lost: {ok_line}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
