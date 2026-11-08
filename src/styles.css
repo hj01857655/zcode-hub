@@ -2124,6 +2124,26 @@ input:focus-visible,
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* 系统日志展开视图：请求/响应头块（紧凑串 k=v; k=v，弱色 + tag 徽标） */
+.x-log-hdr {
+  margin: 6px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.x-log-hdr-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--ink-mute);
+  font-size: 10px;
+  letter-spacing: .04em;
+}
 /* 网关调优配置弹窗 */
 .gw-cfg-mask {
   position: fixed; inset: 0; z-index: 90;

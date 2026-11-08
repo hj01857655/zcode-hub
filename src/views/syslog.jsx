@@ -31,6 +31,8 @@ function parseLine(line) {
     event: o.event,
     detail: typeof o.detail === "string" ? o.detail : "",
     body: typeof o.body === "string" ? o.body : "",
+    reqHeaders: typeof o.req_headers === "string" ? o.req_headers : "",
+    resHeaders: typeof o.res_headers === "string" ? o.res_headers : "",
   };
   if (o.method && o.url) {
     p.meta = o.status != null
@@ -133,7 +135,8 @@ export default function SysLogPage() {
     if (flowFilter !== "all") v = v.filter((p) => p.flow === flowFilter);
     const needle = q.trim().toLowerCase();
     if (needle) {
-      v = v.filter((p) => [p.event, p.detail, p.meta, p.body].filter(Boolean).join(" ").toLowerCase().includes(needle));
+      v = v.filter((p) => [p.event, p.detail, p.meta, p.body, p.reqHeaders, p.resHeaders]
+        .filter(Boolean).join(" ").toLowerCase().includes(needle));
     }
     return v;
   }, [parsed, flowFilter, q]);
@@ -220,6 +223,12 @@ function TextRow({ p }) {
             {/* meta 块：HTTP 行结构化（同单行），业务行纯文本 */}
             {meta
               ? <div className="x-log-pre">{structuredMeta || meta}</div>
+              : null}
+            {p.reqHeaders
+              ? <div className="x-log-hdr"><span className="x-log-hdr-tag">REQ HEADERS</span> {p.reqHeaders}</div>
+              : null}
+            {p.resHeaders
+              ? <div className="x-log-hdr"><span className="x-log-hdr-tag">RES HEADERS</span> {p.resHeaders}</div>
               : null}
             {body ? <pre className="x-log-pre">{prettyJson(body)}</pre> : null}
           </div>
