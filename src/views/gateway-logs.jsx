@@ -115,8 +115,8 @@ export default function GatewayLogsPage() {
     const id = setInterval(() => setTick((x) => x + 1), 30000);
     return () => clearInterval(id);
   }, []);
-  // 自动刷新偏好持久化：localStorage（与主题同模式），进页面恢复上次的开关状态
-  const [auto, setAuto] = useState(() => localStorage.getItem("zcs-gwlog-auto") === "1");
+  // 自动刷新偏好持久化：默认开（日志页就是要盯的运维面），显式关过才默认关
+  const [auto, setAuto] = useState(() => localStorage.getItem("zcs-gwlog-auto") !== "0");
   const toggleAuto = () => {
     const next = !auto;
     setAuto(next);

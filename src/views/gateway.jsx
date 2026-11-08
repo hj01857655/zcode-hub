@@ -52,7 +52,6 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const [showKey, setShowKey] = useState(false);
   const [copiedEp, setCopiedEp] = useState(false);
   // 供应商条目（magpie 式）：展开看上游/模型面，获取模型 + 右键测试
-  const [provOpen, setProvOpen] = useState(false);
   const [provBusy, setProvBusy] = useState(false);
   const [provResult, setProvResult] = useState(null);
 
@@ -275,12 +274,22 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         <span className="tb-spacer" />
       </section>
       <section className="settings open gw-page">
+        {/* 协议选择置顶：决定调用示例与接入形态，先选协议再看端点/密钥。
+            不带 x-proto-seg（那是测试弹窗的面板内全宽形态）；fit-content 收住胶囊，
+            块级 div 默认占满行宽会让三颗小按钮拖着一条整行空胶囊 */}
+        <div className="lang-seg" style={{ width: "fit-content", marginBottom: 10 }}>
+          <button className={"lang-opt" + (accProto === "chat" ? " on" : "")} onClick={() => setAccProto("chat")}>Chat</button>
+          <button className={"lang-opt" + (accProto === "responses" ? " on" : "")} onClick={() => setAccProto("responses")}>Responses</button>
+          <button className={"lang-opt" + (accProto === "messages" ? " on" : "")} onClick={() => setAccProto("messages")}>Messages</button>
+        </div>
         <label>{t("x.endpointLabel")}</label>
         <div className="path-line">
           <input className="zcode-path" type="text" value={endpointInput}
             onChange={(e) => { epTouched.current = true; setEndpointInput(e.target.value); }}
             placeholder="http://127.0.0.1:8081/v1" />
-          <button className="btn-ghost has-ic" title={t("x.copyKey")} onClick={copyEndpoint}><Ic name="copy" size={14} /></button>
+          <button className="btn-ghost has-ic" title={t("x.copyEndpoint")} onClick={copyEndpoint}>
+            <Ic name={copiedEp ? "check" : "copy"} size={14} />
+          </button>
           {portDirty
             ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
@@ -296,7 +305,9 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                 onClick={() => setShowKey(!showKey)}><Ic name={showKey ? "eyeOff" : "eye"} size={14} /></button>
             : null}
           {status?.apiKey
-            ? <button className="btn-ghost" onClick={copyKey}>{copied ? t("x.copied") : t("x.copyKey")}</button>
+            ? <button className="btn-ghost has-ic" title={copied ? t("x.copied") : t("x.copyKey")} onClick={copyKey}>
+                <Ic name={copied ? "check" : "copy"} size={14} />
+              </button>
             : null}
           {keyDirty
             ? <button className="btn-primary" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
@@ -305,14 +316,11 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         {running && (keyDirty || portDirty) ? <div className="hint">{t("x.cfgRunningHint")}</div> : null}
 
         <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>
-        <div className="lang-seg x-proto-seg" style={{ marginBottom: 8 }}>
-          <button className={"lang-opt" + (accProto === "chat" ? " on" : "")} onClick={() => setAccProto("chat")}>Chat</button>
-          <button className={"lang-opt" + (accProto === "responses" ? " on" : "")} onClick={() => setAccProto("responses")}>Responses</button>
-          <button className={"lang-opt" + (accProto === "messages" ? " on" : "")} onClick={() => setAccProto("messages")}>Messages</button>
-        </div>
         <pre className="x-curl">{accessCurl}</pre>
         <div className="path-line" style={{ marginTop: 6 }}>
-          <button className="btn-ghost" onClick={copyExample}>{copiedEx ? t("x.copied") : t("x.copyBtn")}</button>
+          <button className="btn-ghost has-ic" title={copiedEx ? t("x.copied") : t("x.copyBtn")} onClick={copyExample}>
+            <Ic name={copiedEx ? "check" : "copy"} size={14} />
+          </button>
           {err ? <span className="hint" style={{ color: "var(--red)" }}>{err}</span> : null}
         </div>
         <div className="hint">{t("x.endpointDesc")}</div>
@@ -321,10 +329,16 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         <label style={{ marginTop: 14 }}>{t("x.poolLabel")}</label>
         {status?.pool?.members?.length
           ? <>
-              {/* hover 明细：每号模型面（null=未拉取未知，[]=确认无桶） */}
+              {/* hover 明细：第一行对外可用模型并集（/v1/models 同源），随后每号模型面——
+                  页面不渲染常驻模型行，能力视图只进 hover，主页面保持单行摘要 */}
               <div
                 className="x-pool-line"
-                title={poolSorted.map((m) => `${m.name}: ${Array.isArray(m.models) ? (m.models.length ? m.models.join(", ") : t("x.poolNoBuckets")) : t("x.poolUnknown")}`).join("\n")}
+                title={(() => {
+                  const lines = [];
+                  if (status.models?.length) lines.push(`${t("x.modelsAvail")}: ${status.models.join(", ")}`);
+                  lines.push(...poolSorted.map((m) => `${m.name}: ${Array.isArray(m.models) ? (m.models.length ? m.models.join(", ") : t("x.poolNoBuckets")) : t("x.poolUnknown")}`));
+                  return lines.join("\n");
+                })()}
                 onClick={() => onOpenAccount?.()}
               >
                 <Ic name="list" size={14} />
@@ -339,22 +353,15 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                   : null}
                 <span className="x-pool-caret">▸</span>
               </div>
-              {/* 模型面并集（/v1/models 同源）：对外可请求的模型一目了然 */}
-              {status.models?.length
-                ? <div className="x-pool-models">
-                    {status.models.map((n) => <span key={n} className="x-pool-tag model">{n}</span>)}
-                  </div>
-                : null}
             </>
           : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.poolEmpty")}</span></div>}
 
-        {/* 供应商条目（magpie 式）：展开看上游/模型面，获取模型 + 右键测试（tiny 请求独立直连不碰池） */}
+        {/* 供应商条目：测试/获取模型按钮常驻行内，右键仍测试。行本身无左键动作——
+            恢复默认光标避免 pointer 误导（x-pool-line 类自带 pointer 是给可点卡条的） */}
         <div
           className="x-pool-line"
-          style={{ marginTop: 14 }}
-          onClick={() => setProvOpen(!provOpen)}
+          style={{ marginTop: 14, cursor: "default" }}
           onContextMenu={(e) => { e.preventDefault(); if (!provBusy) doProvTest(); }}
-          title={t("x.provTest") + "（右键）"}
         >
           <Ic name="sliders" size={14} />
           <span>ZCode · zcode.z.ai</span>
@@ -367,18 +374,14 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                     {t("x.provFail", { status: provResult.status ?? "—", error: String(provResult.error || "").slice(0, 24) })}
                   </span>
               : null}
-          <span className="x-pool-caret">{provOpen ? "▾" : "▸"}</span>
+          <span className="tb-spacer" />
+          <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
+            <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
+          </button>
+          <button className="btn-ghost" disabled={provBusy} onClick={doProvTest} title={t("x.provTest")}>
+            <Ic name="bolt" size={13} /> {t("x.provTest")}
+          </button>
         </div>
-        {provOpen
-          ? <div className="x-pool-models">
-              <button className="btn-ghost" disabled={provBusy} onClick={doFetchModels}>
-                <Ic name="capture" size={13} /> {t("x.fetchModelsBtn")}
-              </button>
-              <button className="btn-ghost" disabled={provBusy} onClick={doProvTest} title={t("x.provTest")}>
-                <Ic name="bolt" size={13} /> {t("x.provTest")}
-              </button>
-            </div>
-          : null}
       </section>
 
       {tuneOpen
@@ -419,9 +422,9 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                     onChange={(e) => setTimeoutInput(e.target.value)} placeholder="600" />
                 </div>
               </div>
-              <label style={{ marginTop: 14 }}>{t("x.tuneGroupSrv")}</label>
+              <label>{t("x.tuneGroupSrv")}</label>
               <div className="x-tune">
-                <div className="x-tune-item">
+                <div className="x-tune-item x-tune-wide">
                   <span className="x-tune-name">{t("x.tuneCors")}</span>
                   <input className="zcode-path" type="text" value={corsInput}
                     onChange={(e) => setCorsInput(e.target.value)} placeholder="https://a.example, https://b.example | * 放行全部" />
@@ -449,6 +452,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                 <div className="x-tune-item">
                   <span className="x-tune-name">{t("x.tuneSticky")}</span>
                   <button className={"tog-inline" + (stickyInput ? " on" : "")} role="switch" aria-checked={stickyInput}
+                    title={t("x.tuneStickyHint")}
                     onClick={() => setStickyInput(!stickyInput)}>
                     <span className={"toggle" + (stickyInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
                     {stickyInput ? t("x.stickyOn") : t("x.stickyOff")}

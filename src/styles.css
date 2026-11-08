@@ -1350,7 +1350,6 @@ input:focus-visible,
   color: var(--ink);
 }
 .x-tune-panel { width: min(760px, calc(100vw - 48px)); padding: 22px 26px 18px; }
-.x-tune-panel .x-tune { margin-top: 12px; }
 /* 弹窗在 .settings 之外，label/input 吃不到全局表单样式，这里补齐同语言 */
 .x-tune-panel label {
   display: block;
@@ -1358,9 +1357,9 @@ input:focus-visible,
   font-size: 12px;
   letter-spacing: .18em;
   color: var(--ink-mute);
-  margin: 14px 0 6px;
+  margin: 16px 0 6px;
 }
-.x-tune-panel label:first-of-type { margin-top: 12px; }
+.x-tune-panel label:first-of-type { margin-top: 8px; }
 .x-tune-panel .path-line { display: flex; gap: 8px; }
 .x-tune-panel .path-line .btn-ghost { flex: none; }
 .x-tune-panel input.zcode-path {
@@ -1377,15 +1376,21 @@ input:focus-visible,
 }
 .x-tune-panel input.zcode-path:focus { border-color: var(--amber-deep); }
 .x-tune-panel .pv-sub { margin-bottom: 4px; }
-/* 调优网格分两组：数值项 3 列，开关项跨全行横排 */
-.x-tune-panel .x-tune { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; }
+/* 调优网格分两组：CORS 这类长文本项跨全行（220px 列写不开 URL 列表）；
+   列数沿用 .x-tune 基础 auto-fit（minmax(220px,1fr)，760 弹窗下同样 3 列，窄屏自动降列不挤）；
+   组内 margin-top 8px 与 label margin 单边相接，不吃双重间距 */
+.x-tune-panel .x-tune {
+  margin-top: 8px;
+  gap: 14px 16px;
+}
+.x-tune-wide { grid-column: 1 / -1; }
+/* 开关行在网格之外（display:flex 横排），与上方数值组用细分隔线 + 与组间距对齐的 8px */
 .x-tune-panel .x-tune-switch {
-  grid-column: 1 / -1;
   display: flex;
   gap: 28px;
-  padding-top: 4px;
+  padding-top: 10px;
   border-top: 1px solid var(--hairline-soft);
-  margin-top: 2px;
+  margin-top: 8px;
 }
 .x-tune-panel .x-tune-switch .x-tune-item { flex: none; }
 /* 弹窗内开关不用药丸按钮壳：裸滑块 + 文字，去掉边框/内边距/高亮 */
@@ -1754,10 +1759,6 @@ input:focus-visible,
 }
 .x-pool-tag.warn { color: var(--amber); }
 .x-pool-tag.bad { color: var(--red); }
-/* 池摘要条下的模型面并集 tag 行 */
-.x-pool-models { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 12px 0; }
-.x-pool-tag.model { margin-left: 0; color: var(--ink-mute); }
-.x-pool-tag.model::before { content: "#"; opacity: 0.6; margin-right: 2px; }
 /* 池卡片自滃滚动上限 + 折叠计数行 */
 .x-pool { max-height: 340px; overflow-y: auto; }
 .x-pool-more { cursor: pointer; color: var(--ink-mute); font-size: 11px; padding: 4px 0; }
@@ -1868,6 +1869,79 @@ input:focus-visible,
 }
 .x-log-detail .x-log-err { color: var(--red); word-break: break-all; }
 .x-log-copy { padding: 2px 8px; font-size: 11px; margin-bottom: 4px; }
+
+/* —— 系统日志页：HTTP 行结构化渲染（单行 + 展开视图 meta 块） —— */
+.sl-http {
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* method 徽标：复用 x-log-method，get 特例加薄荷绿底 */
+.sl-http .x-log-method {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  line-height: 1.3;
+}
+.sl-http .x-log-method.get {
+  background: var(--color-badge-success-bg);
+  color: var(--color-badge-success-text);
+}
+
+/* host/path 分色：host 弱、path 亮 */
+.sl-host {
+  color: var(--ink-mute);
+}
+
+.sl-path {
+  color: currentColor;
+}
+
+/* 箭头 / req 标识 */
+.sl-arrow {
+  color: var(--ink-dim);
+  opacity: 0.7;
+}
+
+.sl-reqtag {
+  color: var(--amber-darken);
+  font-weight: 600;
+}
+
+/* 状态码分档：2xx=成功 / 4xx=警告 / 5xx+0=失败 */
+.sl-status.ok, .sl-status.warn {
+  background: var(--color-badge-success-bg);
+  color: var(--color-badge-success-text);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.sl-status.fail {
+  background: var(--color-red-bg);
+  color: var(--color-red-fg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ms 弱化 */
+.sl-ms {
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+
+/* body 段：弱色 span，CSS ellipsis 处理溢出 */
+.sl-body {
+  color: var(--ink-mute);
+  font-size: 12px;
+}
 
 /* —— 日志视觉升级：徽章/分档/相对时间/指标卡（追加规则覆盖同名列） —— */
 .x-log-row { padding: 3px 8px; border-radius: 6px; }
