@@ -58,7 +58,10 @@ pub fn note_risk_response(status: u16, body: &str) {
         return; // 手动钉版本做归因实验时不介入，保持实验环境可控
     }
     if !VERSION_DOWNGRADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        crate::flowlog::log("gateway", "version-downgraded", &format!("{SAFE_APP_VERSION} 撞风控（{status}）→ {FALLBACK_APP_VERSION}"));
+        // body 摘要随行：触发源是 status==405 还是 body 3012，降级行上直接可判
+        //（429+3012 组合形态出现时只有 body 能区分）。闩一生只落一次，无噪音负担
+        let body_hint: String = body.trim().chars().take(200).collect();
+        crate::flowlog::log("gateway", "version-downgraded", &format!("{SAFE_APP_VERSION} 撞风控（{status}）→ {FALLBACK_APP_VERSION} body={body_hint}"));
         eprintln!("[gateway] 版本自述 {SAFE_APP_VERSION} 撞风控（{status}），锁存降级到 {FALLBACK_APP_VERSION}");
     }
 }
@@ -140,17 +143,36 @@ pub async fn messages_stream(
     Ok(resp)
 }
 
+/// body 业务码提取：JSON 解析取 code 字段（顶层优先，其次 error 内层），字符串
+/// 数字也接受；非 JSON/无 code 返回 None。**不用 contains 匹配数字码**——logid
+/// 等数字串会误命中子串（实锤 11-08：3008 并发限流的 logid `…03012724…` 含
+/// "3012" 子串，被误判全局风控触发版本降级）。
+fn body_code(body: &str) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    fn find(v: &serde_json::Value) -> Option<i64> {
+        match v {
+            serde_json::Value::Object(m) => m
+                .get("code")
+                .and_then(|c| c.as_i64().or_else(|| c.as_str().and_then(|s| s.parse().ok())))
+                .or_else(|| m.values().find_map(find)),
+            _ => None,
+        }
+    }
+    find(&v)
+}
+
 /// 冷却时长（秒）：0 = 不冷却不换号。5xx 短冷 30s：上游瞬断不值得长罚，但不能不罚
 /// （否则故障上游会被重放循环反复选中）。
 pub fn cooldown_secs(status: u16, body: &str) -> u64 {
+    let code = body_code(body);
     match status {
         401 => 30 * 60,            // token 失效
         429 => 60,                 // 限流/额度
         405 => 10 * 60,            // 风控
-        _ if body.contains("3012") => 10 * 60,
-        _ if body.contains("3007") => 60, // 安全验证：body code（HTTP 400），确定性拒绝，不冷却会拿固定 JWT 无限重打
-        _ if body.contains("3008") || body.contains("3009") || body.contains("3010") => 60,
-        _ if body.contains("1005") => 10 * 60, // exceed quota limit（HTTP 200 包业务错误，11-04 实锤）：额度耗尽确定性拒绝，短冷却会无限重打
+        _ if code == Some(3012) => 10 * 60, // 风控
+        _ if code == Some(3007) => 60, // 安全验证：body code（HTTP 400），确定性拒绝，不冷却会拿固定 JWT 无限重打
+        _ if matches!(code, Some(3008 | 3009 | 3010)) => 60,
+        _ if code == Some(1005) => 10 * 60, // exceed quota limit（HTTP 200 包业务错误，11-04 实锤）：额度耗尽确定性拒绝，短冷却会无限重打
         _ if (500..600).contains(&status) => 30,
         _ => 0,
     }
@@ -158,7 +180,7 @@ pub fn cooldown_secs(status: u16, body: &str) -> u64 {
 
 /// 3012/405 是 IP+指纹级风控：不只冷却单号，整个农场全局退避并立即放弃本次请求
 pub fn is_global_risk(status: u16, body: &str) -> bool {
-    status == 405 || body.contains("3012")
+    status == 405 || body_code(body) == Some(3012)
 }
 
 /// 该错误是否值得换号重放一轮（业务性/瞬时错误）。5xx 视为上游瞬断：换号重放
@@ -166,9 +188,7 @@ pub fn is_retryable(status: u16, body: &str) -> bool {
     status == 0 // 网络错误
         || status == 429
         || (500..600).contains(&status)
-        || body.contains("3008")
-        || body.contains("3009")
-        || body.contains("3010")
+        || matches!(body_code(body), Some(3008 | 3009 | 3010))
 }
 
 #[cfg(test)]
@@ -182,17 +202,30 @@ mod tests {
         assert_eq!(cooldown_secs(429, ""), 60);
         assert_eq!(cooldown_secs(502, "bad gateway"), 30);
         assert_eq!(cooldown_secs(400, "ordinary error"), 0);
-        // 风控档与全局退避判定
-        assert_eq!(cooldown_secs(400, "code:3012"), 10 * 60);
+        // 风控档与全局退避判定（body 走 JSON code 字段精确提取）
+        assert_eq!(cooldown_secs(400, r#"{"code":3012,"msg":"risk"}"#), 10 * 60);
+        assert_eq!(cooldown_secs(400, r#"{"error":{"code":3012}}"#), 10 * 60);
+        assert_eq!(cooldown_secs(400, r#"{"code":3007}"#), 60);
+        assert_eq!(cooldown_secs(200, r#"{"code":1005,"msg":"exceed quota limit"}"#), 10 * 60);
         assert!(is_global_risk(405, ""));
-        assert!(is_global_risk(200, "x3012x"));
+        assert!(is_global_risk(200, r#"{"code":3012}"#));
         assert!(!is_global_risk(502, ""));
         // 重放判定：5xx/429/网络/并发档换号，确定性拒绝（3007/401）不重放
         assert!(is_retryable(0, ""));
         assert!(is_retryable(429, ""));
         assert!(is_retryable(500, ""));
-        assert!(is_retryable(400, "code:3008"));
-        assert!(!is_retryable(400, "code:3007"));
+        assert!(is_retryable(400, r#"{"code":3008}"#));
+        assert!(!is_retryable(400, r#"{"code":3007}"#));
         assert!(!is_retryable(401, ""));
+    }
+
+    /// 回归（11-08 实锤）：3008 并发限流的 logid 时间戳含 "3012" 子串，contains
+    /// 粗匹配曾误判全局风控 → 版本降级闩误触发。code 字段精确提取后不得命中。
+    #[test]
+    fn logid_substring_must_not_trigger_risk() {
+        let body = r#"{"code":3008,"msg":"user concurrency limit exceeded","logid":"2026110803012724a1e2abbaf1a20f6b92"}"#;
+        assert!(!is_global_risk(429, body));
+        assert!(is_retryable(429, body));
+        assert_eq!(cooldown_secs(429, body), 60);
     }
 }
