@@ -438,7 +438,7 @@ export const zh = {
   "x.proxyRotateHint": "撞 405/3012 时出口负分+冷却，绑定账号迁往新出口；关 = 出口照旧使用",
   "x.proxyRiskBackoff": "风控退避（秒）",
   "x.proxyMinScore": "健康分下限",
-  "x.proxyHint": "405/3012 是 IP+指纹级风控：账号↔出口粘性绑定、撞风控迁移+冷却、健康分触底踢出；支持 http / socks5 代理串（凭据 user:pass@）。改动随「保存」落盘，重启网关生效。",
+  "x.proxyHint": "405/3012 是 IP+指纹级风控：账号↔出口粘性绑定、撞风控迁移+冷却、健康分触底踢出；支持 http / socks5 代理串（凭据 user:pass@）。改动随「保存」落盘，重启网关生效。与设置页的「认证代理」无关——那个只管添加账号的登录窗口，这里只管网关上游请求。",
   "x.proxyLabel": "出网代理",
   "x.proxySummary": "{alive}/{total} 条出口可用 · {cool} 冷却",
   "x.proxyScore": "健康分",

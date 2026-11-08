@@ -438,7 +438,7 @@ export const en = {
   "x.proxyRotateHint": "On 405/3012 the egress is scored down and cooled while bound accounts migrate; off = keep using it",
   "x.proxyRiskBackoff": "Risk backoff (secs)",
   "x.proxyMinScore": "Min health score",
-  "x.proxyHint": "405/3012 is IP+fingerprint-level risk control: sticky account↔egress binding, migrate+cool on risk, floor-scored egresses kicked; http / socks5 URLs with user:pass@ supported. Changes persist on Save and apply at next gateway start.",
+  "x.proxyHint": "405/3012 is IP+fingerprint-level risk control: sticky account↔egress binding, migrate+cool on risk, floor-scored egresses kicked; http / socks5 URLs with user:pass@ supported. Changes persist on Save and apply at next gateway start. Unrelated to the auth proxy in Settings — that one only covers the add-account login window, this covers gateway upstream requests.",
   "x.proxyLabel": "Egress",
   "x.proxySummary": "{alive}/{total} egress alive · {cool} cooling",
   "x.proxyScore": "score",
