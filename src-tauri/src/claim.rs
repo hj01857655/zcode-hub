@@ -187,6 +187,31 @@ fn agent() -> ureq::Agent {
     crate::httplog::logged_agent(CLAIM_TIMEOUT_SECS)
 }
 
+/// 带账号粘性代理的 agent：应用级代理池按 (scope=claim, account_id) 选出口，
+/// 池未装配/该用途关 → 直连 agent（行为与改造前完全一致）。
+/// 失败迁移由调用方在撞 IP 级风控（405/3012）时调 AppProxy::on_risk。
+fn scoped_agent(account_id: &str) -> ureq::Agent {
+    app_proxy_agent("claim", account_id, CLAIM_TIMEOUT_SECS).unwrap_or_else(agent)
+}
+
+/// AppProxy 取 ureq 出口的桥（claim/deploy/oauth/quota/referral 共用逻辑形态）。
+/// 放在 claim.rs 是因为它是首个接线模块；导出供兄弟模块复用。
+pub(crate) fn app_proxy_agent(scope: &str, member_id: &str, timeout_secs: u64) -> Option<ureq::Agent> {
+    let ap = APP_PROXY.get()?;
+    // 记录层折衷：池出口 Agent 不带 httplog 中间件（ureq_agent_for 只管出网），
+    // 代理路径的可观测性由 [proxy] eprintln + 调用方自身 flowlog 覆盖。
+    let _ = timeout_secs;
+    Some(ap.agent_for(scope, member_id)?)
+}
+
+/// AppProxy 全局句柄：run() 在 manage 之前以 Arc 注入，spawn_blocking 线程可取。
+static APP_PROXY: std::sync::OnceLock<std::sync::Arc<crate::appproxy::AppProxy>> = std::sync::OnceLock::new();
+
+/// 由 lib.rs run() 调用（manage 之前）：AppProxy 的共享所有权存进 OnceLock。
+pub(crate) fn init_app_proxy(state: std::sync::Arc<crate::appproxy::AppProxy>) {
+    let _ = APP_PROXY.set(state);
+}
+
 /// 账号的 user id（来自 oauth user_info 快照）。缺它说明快照不完整（旧版保存的登录），
 /// UI 据此标「需重新登录」。
 pub(crate) fn oauth_user_id(home: &Path, creds: &Value) -> Option<String> {
@@ -220,12 +245,13 @@ pub fn claimable_plans(
     creds: &Value,
     config: Option<&Value>,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<Vec<ClaimPlan>, String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
     // touch 失败（429/网络错）原样上抛，不吞成「无投放」：前端走 catch 保留
     // 既有可领条，而不是拿一个被限流污染的空结果把刚刷出来的资格顶掉
-    let mut plans = touch_plans(&token, device_mid)?;
+    let mut plans = touch_plans(&token, device_mid, account_id)?;
     plans.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
     Ok(plans)
 }
@@ -246,7 +272,7 @@ pub fn claimed_pending(
 ) -> Option<ClaimedPending> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret).ok()?;
-    let balance = quota::fetch_balance_raw(&token, device_mid.as_deref()).ok()?;
+    let balance = quota::fetch_balance_raw(&token, device_mid.as_deref(), Some(account_id)).ok()?;
     claimed_pending_from_balance(&balance, account_id)
 }
 
@@ -356,14 +382,14 @@ pub(crate) fn claimed_pending_from_balance(balance: &Value, account_id: &str) ->
 /// 投放按 mid + 账号双重分配，mid 用该号自己的。
 /// 失败一律 Err 上抛而非吞成空列表：调用方要区分「确认无投放」和「这次没查着」，
 /// 后者冒充前者会把限流期间的空响应当权威结论，顶掉前端已展示的可领条
-fn touch_plans(token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, String> {
+fn touch_plans(token: &str, mid: Option<String>, account_id: &str) -> Result<Vec<ClaimPlan>, String> {
     let seq = TOUCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let url = format!(
         "{MARKETING_TOUCH_URL}?seq={seq}&app_version={}&platform={}",
         quota::zcode_app_version(),
         quota::client_platform()
     );
-    let mut req = agent().get(&url);
+    let mut req = scoped_agent(account_id).get(&url);
     for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
         req = req.header(&k, &v);
     }
@@ -503,13 +529,14 @@ pub fn submit_claim(
     captcha_param: &str,
     captcha_region: Option<&str>,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<Value, ClaimError> {
     if captcha_param.trim().is_empty() {
         return Err(crate::i18n::tr("err.claim.no_captcha").into());
     }
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    let mut req = agent().post(BILLING_CLAIM_URL);
+    let mut req = scoped_agent(account_id).post(BILLING_CLAIM_URL);
     // 领取版本头跟投放读取通道同档（探测值）：投放按 app_version 过滤，
     // 低一档自述会被服务端当「该档无此投放」→ 1004。详见 quota::zai_claim_headers_with_mid
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
@@ -590,10 +617,11 @@ pub fn touch_report(
     campaign_id: &str,
     action_type: &str,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<(), String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    let mut req = agent().post(MARKETING_TOUCH_ACTION_URL);
+    let mut req = scoped_agent(account_id).post(MARKETING_TOUCH_ACTION_URL);
     for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
         req = req.header(&k, &v);
     }
@@ -622,7 +650,10 @@ pub fn touch_report(
     Ok(())
 }
 
-pub fn fetch_captcha_config() -> Result<CaptchaConfig, String> {    let mut req = agent().get(CLIENT_CONFIGS_URL);
+pub fn fetch_captcha_config() -> Result<CaptchaConfig, String> {
+    // 验证码配置无账号上下文（登录前拉取）：固定粘性 key "captcha" 走 claim scope 池，
+    // 出口稳定复用；池关/该 scope 关回落直连
+    let mut req = scoped_agent("captcha").get(CLIENT_CONFIGS_URL);
     for (k, v) in quota::zai_billing_headers("") {
         req = req.header(&k, &v);
     }

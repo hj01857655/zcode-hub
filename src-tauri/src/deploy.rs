@@ -6,36 +6,37 @@ use serde_json::Value;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ProbeOutcome {
+pub enum DeployOutcome {
     Entitled { entitlements: usize, models: Vec<String> },
     NoEntitlement,
     AuthFailed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ProbeErr {
+enum DeployErr {
     Auth,
     Other(String),
 }
 
-type ProbeFetch<'a> = dyn Fn(&str, &str) -> Result<Value, ProbeErr> + 'a;
+type DeployFetch<'a> = dyn Fn(&str, &str) -> Result<Value, DeployErr> + 'a;
 
-pub(crate) fn switch_probe(
+pub(crate) fn verify_switch(
     creds: &Value,
     config: Option<&Value>,
     secret: &str,
     mid: Option<String>,
     new_gen: bool,
-) -> Option<ProbeOutcome> {
+    account_id: &str,
+) -> Option<DeployOutcome> {
     let channels = quota::pick_channels(creds, config, secret, new_gen);
-    classify_via(&channels, &|url, token| real_fetch(url, token, mid.as_deref()))
+    classify_via(&channels, &|url, token| real_fetch(url, token, mid.as_deref(), account_id))
 }
 
-pub(crate) fn probe_message(outcome: &ProbeOutcome) -> String {
+pub(crate) fn verify_message(outcome: &DeployOutcome) -> String {
     match outcome {
-        ProbeOutcome::Entitled { .. } => String::new(),
-        ProbeOutcome::NoEntitlement => tr("probe.no_entitlement"),
-        ProbeOutcome::AuthFailed => tr("probe.auth_failed"),
+        DeployOutcome::Entitled { .. } => String::new(),
+        DeployOutcome::NoEntitlement => tr("deploy.no_entitlement"),
+        DeployOutcome::AuthFailed => tr("deploy.auth_failed"),
     }
 }
 
@@ -131,7 +132,7 @@ enum Verdict {
     Inconclusive,
 }
 
-fn monitor_verdict(v: Result<Value, ProbeErr>) -> Verdict {
+fn monitor_verdict(v: Result<Value, DeployErr>) -> Verdict {
     match v {
         Ok(v) if v.is_object() && quota::business_ok(&v) => {
             if has_active_subscription(&v) {
@@ -153,12 +154,12 @@ fn monitor_verdict(v: Result<Value, ProbeErr>) -> Verdict {
                 Verdict::Inconclusive
             }
         }
-        Err(ProbeErr::Auth) => Verdict::Auth,
-        Err(ProbeErr::Other(_)) => Verdict::Inconclusive,
+        Err(DeployErr::Auth) => Verdict::Auth,
+        Err(DeployErr::Other(_)) => Verdict::Inconclusive,
     }
 }
 
-fn billing_verdict(v: Result<Value, ProbeErr>) -> Verdict {
+fn billing_verdict(v: Result<Value, DeployErr>) -> Verdict {
     match v {
         Ok(v) if v.is_object() && quota::business_ok(&v) => match balance_entitlements(&v) {
             Some(n) if n > 0 => Verdict::Entitled(n, balance_models(&v).unwrap_or_default()),
@@ -172,12 +173,12 @@ fn billing_verdict(v: Result<Value, ProbeErr>) -> Verdict {
                 _ => Verdict::Inconclusive,
             }
         }
-        Err(ProbeErr::Auth) => Verdict::Auth,
-        Err(ProbeErr::Other(_)) => Verdict::Inconclusive,
+        Err(DeployErr::Auth) => Verdict::Auth,
+        Err(DeployErr::Other(_)) => Verdict::Inconclusive,
     }
 }
 
-fn classify_via(channels: &[Channel], fetch: &ProbeFetch) -> Option<ProbeOutcome> {
+fn classify_via(channels: &[Channel], fetch: &DeployFetch) -> Option<DeployOutcome> {
     if channels.is_empty() {
         return None;
     }
@@ -216,20 +217,23 @@ fn classify_via(channels: &[Channel], fetch: &ProbeFetch) -> Option<ProbeOutcome
         }
     }
     if entitled > 0 {
-        return Some(ProbeOutcome::Entitled { entitlements: entitled, models });
+        return Some(DeployOutcome::Entitled { entitlements: entitled, models });
     }
     if definite_channels == channels.len() && definite_empty && !auth_failed {
-        return Some(ProbeOutcome::NoEntitlement);
+        return Some(DeployOutcome::NoEntitlement);
     }
     if auth_failed {
-        return Some(ProbeOutcome::AuthFailed);
+        return Some(DeployOutcome::AuthFailed);
     }
     None
 }
 
-fn real_fetch(url: &str, token: &str, mid: Option<&str>) -> Result<Value, ProbeErr> {
-    // 统一记录层：切换探针（低频、诊断价值高——登录态验证失败可追溯）经 httplog
-    let agent = crate::httplog::logged_agent(8);
+fn real_fetch(url: &str, token: &str, mid: Option<&str>, account_id: &str) -> Result<Value, DeployErr> {
+    // 统一记录层：切换校验（低频、诊断价值高——登录态验证失败可追溯）经 httplog；
+    // 应用级代理池 scope=deploy：出口按账号粘性（池关/未配置 → 直连，行为与改造前一致）
+    let agent = crate::claim::app_proxy_agent("deploy", account_id, 8)
+        .map(|a| a)
+        .unwrap_or_else(|| crate::httplog::logged_agent(8));
     let mut req = agent.get(url);
     if url.contains("zcode.z.ai") {
         for (k, v) in quota::zai_billing_headers_with_mid(token, mid.map(str::to_string)) {
@@ -241,8 +245,8 @@ fn real_fetch(url: &str, token: &str, mid: Option<&str>) -> Result<Value, ProbeE
             .header("User-Agent", &format!("ZCode/{}", quota::zcode_app_version()))
             .header("x-request-id", &uuid::Uuid::new_v4().to_string());
     }
-    let resp = req.call().map_err(|e| ProbeErr::Other(e.to_string()))?;
-    let (status, text) = crate::httplog::read_resp(resp).map_err(|e| ProbeErr::Other(e.to_string()))?;
+    let resp = req.call().map_err(|e| DeployErr::Other(e.to_string()))?;
+    let (status, text) = crate::httplog::read_resp(resp).map_err(|e| DeployErr::Other(e.to_string()))?;
     if (400..600).contains(&status) {
         return Err(map_http_status(status, &text));
     }
@@ -254,14 +258,14 @@ fn real_fetch(url: &str, token: &str, mid: Option<&str>) -> Result<Value, ProbeE
 
 // 4xx/5xx 分流（3.x http_status_as_error(false) 后 HTTP 状态在 Ok(resp) 路径）：
 // 401/403 与 body 业务 401 都是登录态失效
-fn map_http_status(status: u16, body: &str) -> ProbeErr {
+fn map_http_status(status: u16, body: &str) -> DeployErr {
     if status == 401 || status == 403 {
-        return ProbeErr::Auth;
+        return DeployErr::Auth;
     }
     if let Ok(v) = serde_json::from_str::<Value>(body) {
         if v.get("code").and_then(|c| c.as_i64()) == Some(401) {
-            return ProbeErr::Auth;
+            return DeployErr::Auth;
         }
     }
-    ProbeErr::Other(format!("http {status}"))
+    DeployErr::Other(format!("http {status}"))
 }

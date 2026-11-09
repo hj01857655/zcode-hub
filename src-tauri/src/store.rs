@@ -245,7 +245,7 @@ pub struct SwitchResult {
     #[serde(default)]
     pub config_stale: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub probe: Option<crate::probe::ProbeOutcome>,
+    pub verify: Option<crate::deploy::DeployOutcome>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -998,21 +998,22 @@ fn rematerialize_wiped_builtins(paths: &Paths, target: &Account) {
     }
 }
 
-fn run_switch_probe(paths: &Paths, target: &Account, mid: Option<String>) -> Option<crate::probe::ProbeOutcome> {
+fn run_switch_verify(paths: &Paths, target: &Account, mid: Option<String>) -> Option<crate::deploy::DeployOutcome> {
     if in_sandbox() || !is_logged_in(&target.credentials) {
         return None;
     }
-    let cfg = probe_config_base(paths, target);
-    crate::probe::switch_probe(
+    let cfg = verify_config_base(paths, target);
+    crate::deploy::verify_switch(
         &target.credentials,
         cfg.as_ref(),
         &zcrypto::default_secret(&paths.home),
         mid,
         new_gen_provider_config(&paths.data_root),
+        &target.id,
     )
 }
 
-fn probe_config_base(paths: &Paths, target: &Account) -> Option<Value> {
+fn verify_config_base(paths: &Paths, target: &Account) -> Option<Value> {
     if target.config.is_none() { return None; }
     if new_gen_provider_config(&paths.data_root) { target.config.clone() }
     else { read_live_config(paths).or_else(|| target.config.clone()) }
@@ -1058,7 +1059,7 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
             launched: false,
             hot: false,
             config_stale: false,
-            probe: None,
+            verify: None,
         });
     }
 
@@ -1079,7 +1080,7 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
             write_live_device_mid(paths, &mid)?;
         }
         ensure_virtual_arms_uid_locked(paths, &target.id)?;
-        let probe = run_switch_probe(paths, &target, Some(mid));
+        let verify = run_switch_verify(paths, &target, Some(mid));
         return Ok(SwitchResult {
             switched: true,
             already_active: false,
@@ -1089,7 +1090,7 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
             launched: false,
             hot: true,
             config_stale: target.config.is_none() && paths.live_config().exists(),
-            probe,
+            verify,
         });
     }
 
@@ -1146,7 +1147,7 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
         }
     }
 
-    let probe = run_switch_probe(paths, &target, Some(mid));
+    let verify = run_switch_verify(paths, &target, Some(mid));
 
     Ok(SwitchResult {
         switched: true,
@@ -1157,7 +1158,7 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
         launched,
         hot: false,
         config_stale: target.config.is_none() && paths.live_config().exists(),
-        probe,
+        verify,
     })
 }
 
@@ -1330,7 +1331,7 @@ pub fn account_quota(paths: &Paths, id: &str) -> Result<quota::QuotaOverview, St
     let acc = load_account(paths, id)?;
     // 身份块跟 claim 链对齐：查谁的额度就带谁的 virtual mid，不带 live 全局 mid
     let mid = ensure_virtual_device_mid(paths, id).ok();
-    quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref(), mid.as_deref())
+    quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref(), mid.as_deref(), Some(id))
 }
 
 fn ensure_virtual_device_mid_locked(paths: &Paths, id: &str) -> Result<String, String> {

@@ -562,11 +562,11 @@ export const actions = {
           if (r.preserved_as) bits.push(t("m.bitPreserved", { name: r.preserved_as }));
           if (r.launched) bits.push(t("m.bitLaunched"));
           if (r.config_stale) bits.push(t("m.bitConfigStale"));
-          const probeBad = r.probe && r.probe.kind !== "entitled";
-          if (probeBad) {
-            bits.push(t(r.probe.kind === "no_entitlement" ? "m.bitProbeNoPlan" : "m.bitProbeAuthFailed"));
+          const verifyBad = r.verify && r.verify.kind !== "entitled";
+          if (verifyBad) {
+            bits.push(t(r.verify.kind === "no_entitlement" ? "m.bitVerifyNoPlan" : "m.bitVerifyAuthFailed"));
           }
-          toast(t("m.toastSwitched", { name: r.name }), (r.config_stale || probeBad) ? "warn" : "ok", bits.join(t("common.listSep")));
+          toast(t("m.toastSwitched", { name: r.name }), (r.config_stale || verifyBad) ? "warn" : "ok", bits.join(t("common.listSep")));
         }
         await refresh(); emit();
         pokeAccount(id);

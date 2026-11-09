@@ -139,10 +139,10 @@ pub(crate) fn client_timezone() -> String {
 /// `zcode-v3-start-plan-1103`，钉 3.16.3 全部返回空 deliveries（scripts/touch_live.py 对照实锤）。
 /// 写端点（claim/messages）另走 `SAFE_APP_VERSION`，见 `zai_claim_headers_with_mid`。
 pub(crate) fn zcode_app_version() -> String {
-    registry_probe_app_version()
+    registry_app_version()
 }
 
-fn registry_probe_app_version() -> String {
+fn registry_app_version() -> String {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE
         .get_or_init(|| {
@@ -447,25 +447,31 @@ fn cred_cooldown_map() -> &'static std::sync::Mutex<std::collections::HashMap<St
     M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
+fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>, account_id: Option<&str>) -> Result<Value, String> {
     // 冷却命中直接 Err：不发请求，上抛到 UI 显示「已冷却」，额度轮询对过期凭据静默跳过
     if cred_cooled(token) {
         return Err(crate::i18n::tr("err.quota.cred_cooldown"));
     }
     let retry_delays = [500u64, 1500, 4000];
-    // quota 读取链自建裸 Agent（不挂 httplog middleware）：每响应只落本函数的
-    // 诊断行一行（http-ok-biz/http-err），避免与 middleware 行同响应双行刷屏；
-    // 连接池独立对低频轮询无影响。http_status_as_error(false)
-    // 与 httplog Agent 同语义：4xx/5xx 走 Ok(resp) 的 body 分流，Err 只剩网络层
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    let agent = AGENT.get_or_init(|| {
-        ureq::config::Config::builder()
-            .http_status_as_error(false)
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_global(Some(Duration::from_secs(20)))
-            .build()
-            .into()
-    });
+    // Agent 选择：账号上下文在（account_quota/投放预检链）→ 应用级代理池（scope=deploy，
+    // 按账号粘性出 IP）；池关/该 scope 关/无账号上下文（cli live、监控轮询）→ 直连裸 Agent。
+    // 裸 Agent 不挂 httplog middleware：每响应只落本函数的诊断行一行（http-ok-biz/http-err），
+    // 避免与 middleware 行同响应双行刷屏；代理池 Agent 的可观测性由 [proxy] eprintln + flowlog 覆盖。
+    // http_status_as_error(false) 与 httplog Agent 同语义：4xx/5xx 走 Ok(resp) 的 body 分流，Err 只剩网络层
+    let agent: ureq::Agent = account_id
+        .and_then(|aid| crate::claim::app_proxy_agent("deploy", aid, 20))
+        .unwrap_or_else(|| {
+            static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+            AGENT.get_or_init(|| {
+                ureq::config::Config::builder()
+                    .http_status_as_error(false)
+                    .timeout_connect(Some(Duration::from_secs(10)))
+                    .timeout_global(Some(Duration::from_secs(20)))
+                    .build()
+                    .into()
+            })
+            .clone()
+        });
     let headers = if url.contains("zcode.z.ai") {
         zai_billing_headers_with_mid(token, mid.map(str::to_string))
     } else {
@@ -655,8 +661,8 @@ fn query_with_token_via(token: &str, fetch: &FetchFn) -> Result<QuotaOverview, S
     Err(best_err.unwrap_or_else(|| crate::i18n::tr("err.quota.fail")))
 }
 
-fn query_with_token(token: &str, mid: Option<&str>) -> Result<QuotaOverview, String> {
-    query_with_token_via(token, &|url, tok| http_get_json(url, tok, true, mid))
+fn query_with_token(token: &str, mid: Option<&str>, account_id: Option<&str>) -> Result<QuotaOverview, String> {
+    query_with_token_via(token, &|url, tok| http_get_json(url, tok, true, mid, account_id))
 }
 pub(crate) fn business_ok(v: &Value) -> bool {
     let code = v.get("code").and_then(|c| c.as_i64());
@@ -681,12 +687,12 @@ pub(crate) fn is_active_coding_plan_entry(s: &Value) -> bool {
 /// 原始 billing/balance 抓取（不做归一化）：领取待生效判定用。
 /// normalize_balance 会把 entitlements 兑底成桶条目，「桶未下发」窗口被抹平；
 /// 待生效判定要看的正是原始响应里 plans 与 balances 的覆盖关系。
-pub(crate) fn fetch_balance_raw(token: &str, mid: Option<&str>) -> Result<Value, String> {
+pub(crate) fn fetch_balance_raw(token: &str, mid: Option<&str>, account_id: Option<&str>) -> Result<Value, String> {
     let url = format!("{BILLING_BALANCE_URL}?app_version={}", zcode_app_version());
-    http_get_json(&url, token, false, mid)
+    http_get_json(&url, token, false, mid, account_id)
 }
 
-pub fn query_quota(tokens: &[String], mid: Option<&str>) -> Result<QuotaOverview, String> {
+fn query_quota_for(tokens: &[String], mid: Option<&str>, account_id: Option<&str>) -> Result<QuotaOverview, String> {
     if tokens.is_empty() {
         return Err(crate::i18n::tr("err.quota.no_token"));
     }
@@ -694,7 +700,7 @@ pub fn query_quota(tokens: &[String], mid: Option<&str>) -> Result<QuotaOverview
     let mut first_business: Option<String> = None;
     let mut auth_fail = 0usize;
     for t in tokens {
-        match query_with_token(t, mid) {
+        match query_with_token(t, mid, account_id) {
             Ok(ov) => return Ok(ov),
             Err(e) => {
                 if e.contains("401") {
@@ -708,7 +714,7 @@ pub fn query_quota(tokens: &[String], mid: Option<&str>) -> Result<QuotaOverview
     }
     if auth_fail > 0 && auth_fail == tokens.len() {
         sleep(Duration::from_millis(1500));
-        if let Ok(ov) = query_with_token(&tokens[0], mid) {
+        if let Ok(ov) = query_with_token(&tokens[0], mid, account_id) {
             return Ok(ov);
         }
         return Err(crate::i18n::tr("err.token.expired"));
@@ -1028,25 +1034,31 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
     }
 }
 
-fn query_channels(channels: &[Channel], mid: Option<&str>) -> Result<QuotaOverview, String> {
-    query_channels_via(channels, &|url, tok| http_get_json(url, tok, true, mid))
+fn query_channels(channels: &[Channel], mid: Option<&str>, account_id: Option<&str>) -> Result<QuotaOverview, String> {
+    query_channels_via(channels, &|url, tok| http_get_json(url, tok, true, mid, account_id))
 }
 
 pub fn quota_for_live(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>) -> Result<QuotaOverview, String> {
+    quota_for_live_scoped(home, creds, config, mid, None)
+}
+
+/// account_id 有值 → 额度读取走应用级代理池（scope=deploy，按账号粘性出 IP）；
+/// None（cli live / 监控轮询等无账号上下文）→ 直连，行为与池上线前一致。
+pub fn quota_for_live_scoped(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>, account_id: Option<&str>) -> Result<QuotaOverview, String> {
     let secret = zcrypto::default_secret(home);
     let new_gen = crate::store::new_gen_provider_config(home);
     let channels = pick_channels(creds, config, &secret, new_gen);
     if !channels.is_empty() {
-        if let Ok(ov) = query_channels(&channels, mid) {
+        if let Ok(ov) = query_channels(&channels, mid, account_id) {
             return Ok(ov);
         }
     }
     let tokens = candidate_tokens(creds, config, &secret, new_gen);
-    query_quota(&tokens, mid)
+    query_quota_for(&tokens, mid, account_id)
 }
 
-pub fn quota_for_snapshot(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>) -> Result<QuotaOverview, String> {
-    quota_for_live(home, creds, config, mid)
+pub fn quota_for_snapshot(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>, account_id: Option<&str>) -> Result<QuotaOverview, String> {
+    quota_for_live_scoped(home, creds, config, mid, account_id)
 }
 
 fn unit_label(unit: Option<i64>, number: Option<i64>) -> (String, String) {
@@ -2001,7 +2013,7 @@ mod tests {
 
     /// 订阅有在期 coding 套餐 → 才打 monitor，且订阅响应复用做套餐名/到期增强
     #[test]
-    fn bigmodel_monitor_probed_only_after_subscription_confirms() {
+    fn bigmodel_monitor_runs_only_after_subscription_confirms() {
         use std::cell::RefCell;
         let calls = RefCell::new(Vec::<String>::new());
         let fetch = |url: &str, _t: &str| -> Result<Value, String> {

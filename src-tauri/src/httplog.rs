@@ -225,7 +225,7 @@ impl Middleware for HttpLogMw {
 
 /// 带记录的 ureq Agent 工厂（进程级单例，按超时档各一池）：全仓 HTTP 调用统一
 /// 从这里建 Agent，中间件自动落 flowlog。claim.rs 的 agent() / oauth.rs 的
-/// web_agent() / referral.rs / probe.rs 都调这里。
+/// web_agent() / referral.rs / deploy.rs 都调这里。
 pub fn logged_agent(timeout_secs: u64) -> ureq::Agent {
     static AGENTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, ureq::Agent>>> =
         std::sync::OnceLock::new();

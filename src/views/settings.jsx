@@ -69,6 +69,11 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
   const [proxyInput, setProxyInput] = useState("");
   const pathElRef = useRef(null);
   const proxyElRef = useRef(null);
+  // 出网代理池（应用级）：mode 三态 + 出口清单 + 用途开关。配置与运行态来自 proxy_settings_get
+  const [pxForm, setPxForm] = useState({ mode: "off", single: "", proxies: "", sticky: true, rotate: true, riskBackoff: "", minScore: "", scopes: { gateway: true, claim: true, deploy: true, oauth: true } });
+  const [pxStats, setPxStats] = useState([]);
+  const pxDirtyRef = useRef(false);
+  const pxLoadedRef = useRef(false);
   const busy = useRef(false);
   // 开关读最新值用 ref 镜像；optRef 是乐观覆盖层——点击同步写入，
   // render 未提交时点击也能读到正确期望态，IPC 成功后清键
@@ -129,6 +134,24 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
     if (document.activeElement !== proxyElRef.current) setProxyInput(s.auth_proxy_url || "");
     setAutostart(auto);
     if (s?.language) syncLang(s.language);
+    // 出网代理：聚焦代理串输入框时不覆盖（与 path/auth proxy 同一防抖语义）
+    try {
+      const px = await invoke("proxy_settings_get");
+      setPxStats(px.stats || []);
+      if (!pxDirtyRef.current) {
+        setPxForm({
+          mode: ["off", "single", "pool"].includes(px.mode) ? px.mode : "off",
+          single: px.single || "",
+          proxies: (px.proxies || []).join("\n"),
+          sticky: px.sticky !== false,
+          rotate: px.rotate !== false,
+          riskBackoff: String(px.riskBackoffSecs ?? ""),
+          minScore: String(px.minScore ?? ""),
+          scopes: { gateway: true, claim: true, deploy: true, oauth: true, ...(px.scopes || {}) },
+        });
+        pxLoadedRef.current = true;
+      }
+    } catch (e) { console.warn("proxy_settings_get", e); }
   };
 
   // 点击即翻 UI，IPC 串行入队；失败 toast 后拉盘上真值纠正 UI
@@ -233,6 +256,26 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
       });
     },
 
+    // 出网代理池：保存即整池重建（网关与账号管理同时生效，无需重启网关）
+    pxSet: (patch) => setPxForm((v) => ({ ...v, ...patch })),
+    pxMarkDirty: () => { pxDirtyRef.current = true; },
+    pxSave: () => guard(async () => {
+      const f = pxForm;
+      await invoke("proxy_settings_save", {
+        mode: ["off", "single", "pool"].includes(f.mode) ? f.mode : "off",
+        single: f.single.trim(),
+        proxies: f.proxies.split("\n").map((x) => x.trim()).filter(Boolean),
+        sticky: f.sticky,
+        rotate: f.rotate,
+        riskBackoffSecs: f.riskBackoff.trim() !== "" && Number.isFinite(parseInt(f.riskBackoff.trim(), 10)) ? Math.max(0, parseInt(f.riskBackoff.trim(), 10)) : null,
+        minScore: f.minScore.trim() !== "" && Number.isFinite(parseInt(f.minScore.trim(), 10)) ? parseInt(f.minScore.trim(), 10) : null,
+        scopes: f.scopes,
+      });
+      pxDirtyRef.current = false;
+      toast(t("s.pxSaved"));
+      await refresh();
+    }),
+
     exportAll: () => guard(async () => {
       const p = await invoke("export_all_pick_path");
       if (!p.picked) { toast(t("m.exportCanceled")); return; }
@@ -321,6 +364,69 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
               onKeyDown={(e) => { if (e.key === "Enter") actions.saveProxy(); }} />
             <button className="btn-ghost" onClick={actions.saveProxy}>{t("common.save")}</button>
           </div>
+        </div>
+        <div className="set-card">
+          <label>{t("s.pxLabel")}</label>
+          <div className="tog-row">
+            <div className="tog-info"><div className="tog-label">{t("s.pxMode")}</div></div>
+            <div className="lang-seg" style={{ width: "fit-content" }} role="radiogroup" aria-label={t("s.pxMode")}>
+              {["off", "single", "pool"].map((m) => (
+                <button key={m} className={"lang-opt" + (pxForm.mode === m ? " on" : "")} role="radio" aria-checked={pxForm.mode === m}
+                  title={t(m === "off" ? "s.pxModeOffDesc" : m === "single" ? "s.pxModeSingleDesc" : "s.pxModePoolDesc")}
+                  onClick={() => { actions.pxMarkDirty(); actions.pxSet({ mode: m }); }}>{t(m === "off" ? "s.pxModeOff" : m === "single" ? "s.pxModeSingle" : "s.pxModePool")}</button>
+              ))}
+            </div>
+          </div>
+          {pxForm.mode === "single" ? (
+            <div className="path-line">
+              <input className="zcode-path auth-proxy" type="text" value={pxForm.single}
+                placeholder={t("s.pxProxiesPh").split("\n")[0]}
+                onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ single: e.target.value }); }} />
+            </div>
+          ) : null}
+          {pxForm.mode === "pool" ? (
+            <div className="path-line" style={{ display: "block" }}>
+              <label className="tog-label" style={{ marginBottom: 4 }}>{t("s.pxFProxies")}</label>
+              <textarea className="zcode-path" rows={4} style={{ width: "100%" }} value={pxForm.proxies}
+                placeholder={t("s.pxProxiesPh")}
+                onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ proxies: e.target.value }); }} />
+            </div>
+          ) : null}
+          {pxForm.mode !== "off" ? (
+            <>
+              <div className="tog-row">
+                <div className="tog-info"><div className="tog-label">{t("s.pxFSticky")}</div><div className="hint">{t("s.pxFStickyHint")}</div></div>
+                <Toggle on={pxForm.sticky !== false} label={t("s.pxFSticky")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ sticky: pxForm.sticky === false }); }} />
+              </div>
+              <div className="tog-row">
+                <div className="tog-info"><div className="tog-label">{t("s.pxFRotate")}</div><div className="hint">{t("s.pxFRotateHint")}</div></div>
+                <Toggle on={pxForm.rotate !== false} label={t("s.pxFRotate")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ rotate: pxForm.rotate === false }); }} />
+              </div>
+              <div className="path-line">
+                <input className="zcode-path" type="text" inputMode="numeric" style={{ width: 120 }} value={pxForm.riskBackoff}
+                  placeholder={t("s.pxFRiskBackoff")} title={t("s.pxFRiskBackoffHint")}
+                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ riskBackoff: e.target.value }); }} />
+                <input className="zcode-path" type="text" inputMode="numeric" style={{ width: 120 }} value={pxForm.minScore}
+                  placeholder={t("s.pxFMinScore")} title={t("s.pxFMinScoreHint")}
+                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ minScore: e.target.value }); }} />
+              </div>
+              {["gateway", "claim", "deploy", "oauth"].map((sc) => (
+                <div className="tog-row" key={sc}>
+                  <div className="tog-info"><div className="tog-label">{t(`s.pxScope_${sc}`)}</div><div className="hint">{t(`s.pxScope_${sc}Desc`)}</div></div>
+                  <Toggle on={pxForm.scopes[sc] !== false}
+                    label={t(`s.pxScope_${sc}`)}
+                    onClick={() => { actions.pxMarkDirty(); actions.pxSet({ scopes: { ...pxForm.scopes, [sc]: !(pxForm.scopes[sc] ?? true) } }); }} />
+                </div>
+              ))}
+            </>
+          ) : null}
+          <div className="path-line">
+            <button className="btn-ghost" onClick={actions.pxSave}>{t("common.save")}</button>
+          </div>
+          {pxStats.length > 0 ? (
+            <div className="hint">{t("s.pxStats", { total: pxStats.length, cooling: pxStats.filter((p) => p.cooling).length })}</div>
+          ) : null}
+          <div className="hint">{t("s.pxHint")}</div>
         </div>
         <div className="set-card">
           <label>{t("s.libLabel")}</label>

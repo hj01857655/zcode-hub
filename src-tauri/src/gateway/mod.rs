@@ -22,8 +22,8 @@ pub struct GatewayShared {
     /// per-account 模型面镜像（server.rs ensure_model_faces 回写），供 gateway_status 拼进池成员。
     /// id → None=拉取失败/未拉取（未知），Some(空)=确认无桶，Some(list)=确认模型集
     pub model_faces: Mutex<std::collections::HashMap<String, Option<Vec<String>>>>,
-    /// 出网代理池（config.proxy mode=off 时不装配）：账号↔IP 粘性 + 风控迁移 + 健康计分。
-    /// Mutex 持 Option：网关每次 start() 按最新 config 重建（UI 改配置重启即生效）
+    /// 出网代理池（mode=off 时不装配）：账号↔IP 粘性 + 风控迁移 + 健康计分。
+    /// Mutex 持 Option：网关每次 start() 从磁盘最新 proxy 配置重建（设置页保存即落盘，重启即生效）
     pub proxies: Mutex<Option<proxy::ProxyPool>>,
 }
 impl GatewayShared {
@@ -106,15 +106,14 @@ impl GatewayState {
             config: Mutex::new(config::GatewayConfig::load()),
             shutdown: Mutex::new(None),
             shared: std::sync::Arc::new({
-                // 代理池与 config 同源装配：mode=off → None（完全直连）
-                let cfg = config::GatewayConfig::load();
                 GatewayShared {
                     // 启动时从 gateway.jsonl 读回尾部，重启不丢日志
                     log: Mutex::new(GatewayShared::load_log_file()),
                     pool: pool::Pool::new(),
                     models: Mutex::new(MODEL_LIST.iter().map(|s| s.to_string()).collect()),
                     model_faces: Mutex::new(std::collections::HashMap::new()),
-                    proxies: Mutex::new(proxy::ProxyPool::from_config(&cfg)),
+                    // 代理池从磁盘 proxy 键装配（与账号管理同源），mode=off → None（完全直连）
+                    proxies: Mutex::new(proxy::ProxyPool::from_disk(config::GatewayConfig::load().upstream_connect_secs)),
                 }
             }),
         }
@@ -143,9 +142,9 @@ impl GatewayState {
             .try_into()
             .map_err(|e| format!("bad port {}: {e}", cfg.port))?;
         let svc_cfg = cfg.clone();
-        // 池随网关启动装配：UI 保存过 proxy 配置后重启即按新配置重建（mode=off → None 直连）
+        // 池随网关启动从磁盘最新 proxy 配置装配：设置页保存落盘后，重启网关即按新配置重建
         if let Ok(mut px) = self.shared.proxies.lock() {
-            *px = proxy::ProxyPool::from_config(&cfg);
+            *px = proxy::ProxyPool::from_disk(cfg.upstream_connect_secs);
         }
         let shared = std::sync::Arc::clone(&self.shared);
         let running = &self.running;

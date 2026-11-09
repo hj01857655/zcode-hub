@@ -13,14 +13,15 @@ pub const REFERRAL_BIND_URL: &str = "https://zcode.z.ai/zcode-api/incentive/refe
 
 const REFERRAL_TIMEOUT_SECS: u64 = 20;
 
-fn agent() -> ureq::Agent {
-    // 统一记录层：referral 链（summary/invitees/bind）经 httplog 共享 Agent，
-    // 中间件自动落 flowlog，系统日志页可查
-    crate::httplog::logged_agent(REFERRAL_TIMEOUT_SECS)
+fn agent(account_id: &str) -> ureq::Agent {
+    // 应用级出网代理池：referral 属账号操作面，scope 归 claim（与领取打卡同策略，
+    // 按账号粘性出 IP）；池关闭/该 scope 关闭时回落直连 logged_agent
+    crate::claim::app_proxy_agent("claim", account_id, REFERRAL_TIMEOUT_SECS)
+        .unwrap_or_else(|| crate::httplog::logged_agent(REFERRAL_TIMEOUT_SECS))
 }
 
-fn get_json(url: &str, token: &str, mid: Option<String>) -> Result<Value, String> {
-    let mut req = agent().get(url);
+fn get_json(url: &str, token: &str, mid: Option<String>, account_id: &str) -> Result<Value, String> {
+    let mut req = agent(account_id).get(url);
     for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
         req = req.header(&k, &v);
     }
@@ -45,10 +46,11 @@ pub fn summary(
     creds: &Value,
     config: Option<&Value>,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<Value, String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    get_json(REFERRAL_SUMMARY_URL, &token, device_mid)
+    get_json(REFERRAL_SUMMARY_URL, &token, device_mid, account_id)
 }
 
 pub fn invitees(
@@ -56,10 +58,11 @@ pub fn invitees(
     creds: &Value,
     config: Option<&Value>,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<Value, String> {
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    get_json(REFERRAL_INVITEES_URL, &token, device_mid)
+    get_json(REFERRAL_INVITEES_URL, &token, device_mid, account_id)
 }
 
 /// 受邀号绑码。captcha_param 由验证码子窗口产出（与 claim 同一条无痕/交互流程），
@@ -72,6 +75,7 @@ pub fn submit_bind(
     captcha_param: &str,
     captcha_region: Option<&str>,
     device_mid: Option<String>,
+    account_id: &str,
 ) -> Result<Value, String> {
     if captcha_param.trim().is_empty() {
         return Err(crate::i18n::tr("err.claim.no_captcha").into());
@@ -82,7 +86,7 @@ pub fn submit_bind(
     }
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
-    let mut req = agent().post(REFERRAL_BIND_URL);
+    let mut req = agent(account_id).post(REFERRAL_BIND_URL);
     for (k, v) in quota::zai_billing_headers_with_mid(&token, device_mid) {
         req = req.header(&k, &v);
     }

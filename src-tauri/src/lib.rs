@@ -1,6 +1,7 @@
 pub mod cipher;
 pub mod cli;
 pub mod i18n;
+pub mod appproxy;
 mod claim;
 mod flowlog;
 // 全平台编译：glass.rs 内部 cfg 守卫（mac 原生层在 cfg(target_os) 的 mod mac 内，
@@ -9,7 +10,7 @@ mod glass;
 // HTTP 统一记录层：共享 Agent 工厂 + ureq Middleware，全仓上游接口调用自动落 flowlog
 pub mod httplog;
 mod oauth;
-mod probe;
+mod deploy;
 mod quota;
 mod referral;
 mod store;
@@ -309,7 +310,7 @@ async fn claim_refresh_one(id: String) -> Result<Vec<claim::ClaimPlan>, String> 
         let paths = Paths::detect();
         let mid = store::ensure_virtual_device_mid(&paths, &id)?;
         let acc = load_account(&paths, &id)?;
-        claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+        claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid), &id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -346,7 +347,7 @@ async fn claim_start(
     let paths = Paths::detect();
     let mid = store::ensure_virtual_device_mid(&paths, &id)?;
     let acc = load_account(&paths, &id)?;
-    let plans = claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
+    let plans = claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()), &id)?;
     let plan = plans
         .iter()
         .find(|p| p.plan_id == plan_id)
@@ -398,6 +399,7 @@ async fn claim_captcha_submit(
     let rep_config = pending.config.clone();
     let rep_mid = pending.device_mid.clone();
     let rep_plan_id = pending.plan_id.clone();
+    let aid_clone = aid.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let paths = Paths::detect();
         claim::submit_claim(
@@ -408,6 +410,7 @@ async fn claim_captcha_submit(
             &param,
             region.as_deref(),
             Some(pending.device_mid),
+            &aid_clone,
         )
     })
     .await
@@ -500,6 +503,7 @@ async fn claim_captcha_submit(
                     cid,
                     "confirm",
                     Some(rep_mid),
+                    &aid,
                 ) {
                     eprintln!("[zsw] marketing/touch/action: {e}");
                 }
@@ -537,10 +541,11 @@ async fn submit_pending_bind(
     region: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // 阻塞提交丢 blocking 线程池；pending 被 move，字段提前 clone 供结果组装
-    let (aid, aname, code) = (
+    let (aid, aname, code, aid_ref) = (
         pending.account_id.clone(),
         pending.account_name.clone(),
         pending.invite_code.clone(),
+        pending.account_id.clone(),
     );
     let res = tauri::async_runtime::spawn_blocking(move || {
         let paths = Paths::detect();
@@ -552,6 +557,7 @@ async fn submit_pending_bind(
             &param,
             region.as_deref(),
             Some(pending.device_mid),
+            &aid_ref,
         )
     })
     .await
@@ -583,7 +589,7 @@ async fn referral_summary(id: String) -> Result<Value, String> {
         let paths = Paths::detect();
         let mid = store::ensure_virtual_device_mid(&paths, &id)?;
         let acc = load_account(&paths, &id)?;
-        referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+        referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid), &id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -596,7 +602,7 @@ async fn referral_invitees(id: String) -> Result<Value, String> {
         let paths = Paths::detect();
         let mid = store::ensure_virtual_device_mid(&paths, &id)?;
         let acc = load_account(&paths, &id)?;
-        referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+        referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid), &id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1513,9 +1519,53 @@ fn set_theme_pref(th: String) -> Result<(), String> {
     std::fs::write(dir.join("theme.txt"), val).map_err(|e| e.to_string())
 }
 
+/// 出网代理设置读取（设置页回显）：配置 + 出口运行态。
+#[tauri::command]
+fn proxy_settings_get(app: AppHandle) -> Result<serde_json::Value, String> {
+    let _ = app;
+    let ap = app.state::<appproxy::AppProxy>();
+    Ok(ap.status())
+}
+
+/// 出网代理设置保存（设置页表单语义：None = 沿用盘上值）。
+/// 保存即整池重建，网关与账号管理两侧立即生效（网关无需重启）。
+#[tauri::command]
+fn proxy_settings_save(
+    app: AppHandle,
+    mode: Option<String>,
+    single: Option<String>,
+    proxies: Option<Vec<String>>,
+    sticky: Option<bool>,
+    rotate: Option<bool>,
+    risk_backoff_secs: Option<u64>,
+    min_score: Option<i32>,
+    scopes: Option<std::collections::HashMap<String, bool>>,
+) -> Result<serde_json::Value, String> {
+    let _ = app;
+    let ap = app.state::<appproxy::AppProxy>();
+    let mut cfg = {
+        let c = ap.cfg.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
+    if let Some(v) = mode { if matches!(v.as_str(), "off" | "single" | "pool") { cfg.mode = v; } }
+    if let Some(v) = single { cfg.single = v.trim().to_string(); }
+    if let Some(v) = proxies { cfg.proxies = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
+    if let Some(v) = sticky { cfg.sticky_per_account = Some(v); }
+    if let Some(v) = rotate { cfg.rotate_on_risk = Some(v); }
+    if let Some(v) = risk_backoff_secs { cfg.risk_backoff_secs = Some(v.min(86400)); }
+    if let Some(v) = min_score { cfg.min_score = Some(v.clamp(-10, 0)); }
+    if let Some(v) = scopes { cfg.scopes = v; }
+    ap.save(cfg)?;
+    Ok(ap.status())
+}
+
 pub fn run() {
+    let app_proxy = std::sync::Arc::new(appproxy::AppProxy::new());
+    // claim/deploy 等后台 spawn_blocking 线程的全局取用点（OnceLock<Arc>）
+    claim::init_app_proxy(std::sync::Arc::clone(&app_proxy));
     tauri::Builder::default()
         .manage(gateway::GatewayState::new())
+        .manage(app_proxy)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -1567,6 +1617,8 @@ pub fn run() {
             open_external,
             reveal_main,
             set_theme_pref,
+            proxy_settings_get,
+            proxy_settings_save,
             gateway_start,
             gateway_stop,
             gateway_status,
@@ -1736,14 +1788,20 @@ async fn gateway_start(
         if let Some(v) = body_limit_mb { if v > 0 && v <= 512 { cfg.body_limit_mb = v; } }
         if let Some(v) = log_to_disk { cfg.log_to_disk = v; }
         if let Some(v) = log_file_max_mb { if v > 0 && v <= 1024 { cfg.log_file_max_mb = v; } }
-        // 代理池配置（None = 沿用盘上值，表单保存语义；出口列表 trim 去空行）
-        if let Some(v) = proxy_mode { if matches!(v.as_str(), "off" | "single" | "pool") { cfg.proxy.mode = v; } }
-        if let Some(v) = proxy_single { cfg.proxy.single = v.trim().to_string(); }
-        if let Some(v) = proxy_proxies { cfg.proxy.proxies = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
-        if let Some(v) = proxy_sticky { cfg.proxy.sticky_per_account = Some(v); }
-        if let Some(v) = proxy_rotate { cfg.proxy.rotate_on_risk = Some(v); }
-        if let Some(v) = proxy_risk_backoff_secs { cfg.proxy.risk_backoff_secs = Some(v.min(86400)); }
-        if let Some(v) = proxy_min_score { cfg.proxy.min_score = Some(v.clamp(-10, 0)); }
+        // 代理配置已上移设置页（proxy_settings_save）：gateway_start 不再接受代理字段，
+        // 保留参数仅为前端旧签名兼容——收到即转发给 AppProxy（同一配置面，即时生效）
+        if proxy_mode.is_some() || proxy_single.is_some() || proxy_proxies.is_some() {
+            let ap = app.state::<appproxy::AppProxy>();
+            let mut pc = ap.cfg.lock().map_err(|e| e.to_string())?.clone();
+            if let Some(v) = proxy_mode { if matches!(v.as_str(), "off" | "single" | "pool") { pc.mode = v; } }
+            if let Some(v) = proxy_single { pc.single = v.trim().to_string(); }
+            if let Some(v) = proxy_proxies { pc.proxies = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
+            if let Some(v) = proxy_sticky { pc.sticky_per_account = Some(v); }
+            if let Some(v) = proxy_rotate { pc.rotate_on_risk = Some(v); }
+            if let Some(v) = proxy_risk_backoff_secs { pc.risk_backoff_secs = Some(v.min(86400)); }
+            if let Some(v) = proxy_min_score { pc.min_score = Some(v.clamp(-10, 0)); }
+            ap.save(pc)?;
+        }
         // 落盘：不保存的话新端口/密钥重启即丢，UI 上的「保存」就成了骗局
         if let Err(e) = cfg.save() {
             flowlog::log("gateway", "config-save-fail", &e.to_string());
@@ -1765,6 +1823,12 @@ async fn gateway_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String
 async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<gateway::GatewayState>();
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    // 应用级代理配置（设置页保存）：回显 + 出口运行态
+    let ap_cfg = {
+        let ap = app.state::<appproxy::AppProxy>();
+        let c = ap.cfg.lock().map_err(|e| e.to_string())?;
+        c.clone()
+    };
     // pool 快照：成员清单现取（账号库投影），池侧只回冷却/在飞/计数
     let members = gateway::pool::members().unwrap_or_default();
     let mut snapshot = state.shared.pool.snapshot(&members);
@@ -1817,14 +1881,15 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         "bodyLimitMb": cfg.body_limit_mb,
         "logToDisk": cfg.log_to_disk,
         "logFileMaxMb": cfg.log_file_max_mb,
-        // 代理池配置回显（Option 字段回填内置默认后的生效值；出口运行态走 status()）
-        "proxyMode": cfg.proxy.mode,
-        "proxySingle": cfg.proxy.single,
-        "proxyProxies": cfg.proxy.proxies,
-        "proxySticky": cfg.proxy.sticky_per_account.unwrap_or(true),
-        "proxyRotate": cfg.proxy.rotate_on_risk.unwrap_or(true),
-        "proxyRiskBackoffSecs": cfg.proxy.risk_backoff_secs.unwrap_or(45),
-        "proxyMinScore": cfg.proxy.min_score.unwrap_or(-2),
+        // 代理配置回显：来源已迁移设置页（AppProxy），出口运行态同步返回。
+        // 保留旧键名（proxyMode 等）= gateway.jsx 若还引用也能正常回显
+        "proxyMode": ap_cfg.mode,
+        "proxySingle": ap_cfg.single,
+        "proxyProxies": ap_cfg.proxies,
+        "proxySticky": ap_cfg.sticky_per_account.unwrap_or(true),
+        "proxyRotate": ap_cfg.rotate_on_risk.unwrap_or(true),
+        "proxyRiskBackoffSecs": ap_cfg.risk_backoff_secs.unwrap_or(45),
+        "proxyMinScore": ap_cfg.min_score.unwrap_or(-2),
         "proxyStats": proxy_stats,
     }))
 }

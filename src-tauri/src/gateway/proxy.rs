@@ -8,7 +8,6 @@
 //! - 3008/1005/401 与 IP 无关，健康分不动
 //! - 全部出口死透时整池复位（二次机会）：全池不可用比脏 IP 更伤可用性
 
-use super::config::GatewayConfig;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -26,6 +25,21 @@ pub struct ProxyStat {
 struct ProxyEntry {
     url: String,
     client: reqwest::Client,
+    /// 同一出口的 ureq Agent（账号管理侧：claim/deploy/oauth/quota/referral）。
+    /// 按需惰性创建：mode=single/pool 的 ureq 版本只在账号管理路径首次用到时构建。
+    ureq_agent: std::sync::OnceLock<ureq::Agent>,
+}
+
+impl Clone for ProxyEntry {
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            client: self.client.clone(),
+            // OnceLock 非 Copy：克隆共享同一 Lazy 槽不行（OnceLock 不可 clone 出独立槽），
+            // 这里克隆的是"空槽"，首次 agent_for 时各自惰性构建——同一 url 构建结果一致
+            ureq_agent: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 struct Inner {
@@ -45,9 +59,14 @@ pub struct ProxyPool {
 }
 
 impl ProxyPool {
-    /// 从网关配置装配；mode 无效或列表为空返回 None（调用方保持直连）。
-    pub fn from_config(cfg: &GatewayConfig) -> Option<ProxyPool> {
-        let p = &cfg.proxy;
+    /// 从磁盘最新代理配置装配（gateway.json 顶层 `proxy` 键，设置页保存即落盘）。
+    /// mode 无效或列表为空返回 None（调用方保持直连）。connect 超时取网关配置。
+    pub fn from_disk(connect_secs: u64) -> Option<ProxyPool> {
+        Self::from_parts(&super::config::load_app_proxy(), connect_secs)
+    }
+
+    /// 从代理配置段装配（应用级入口，appproxy 用）。
+    pub fn from_parts(p: &super::config::ProxyConfig, connect_secs: u64) -> Option<ProxyPool> {
         let urls: Vec<String> = match p.mode.as_str() {
             "single" => {
                 if p.single.is_empty() {
@@ -67,8 +86,12 @@ impl ProxyPool {
         let risk_cool = Duration::from_secs(p.risk_backoff_secs.filter(|v| *v > 0).unwrap_or(45));
         let mut entries = Vec::new();
         for u in urls {
-            match proxy_client(&u, cfg.upstream_connect_secs) {
-                Ok(c) => entries.push(ProxyEntry { url: u, client: c }),
+            match proxy_client(&u, connect_secs) {
+                Ok(c) => entries.push(ProxyEntry {
+                    url: u,
+                    client: c,
+                    ureq_agent: std::sync::OnceLock::new(),
+                }),
                 Err(e) => eprintln!("[proxy] 代理串无效已跳过: {} ({e})", mask_proxy(&u)),
             }
         }
@@ -98,46 +121,55 @@ impl ProxyPool {
         })
     }
 
-    /// 按账号取粘性出口：已有绑定且出口可用 → 返回；无绑定/绑定死/冷却中 →
-    /// 重新分配（绑定数最少优先）。全部死透 → 整池复位二次机会。
+    /// 按账号取粘性出口（reqwest 版，网关转发用）：已有绑定且出口可用 → 返回；
+    /// 无绑定/绑定死/冷却中 → 重新分配（绑定数最少优先）。全部死透 → 整池复位二次机会。
     /// None = 池内无可分配出口（调用方回落基础客户端直连）。
     pub fn client_for(&self, member_id: &str) -> Option<reqwest::Client> {
+        self.bind_for(member_id).map(|e| e.client.clone())
+    }
+
+    /// 按账号取粘性出口（ureq 版，账号管理投放/领取/探测用）。
+    /// 绑定逻辑与 client_for 完全同一份（同一账号在网关与账号管理两侧粘同一 IP）。
+    pub fn agent_for(&self, member_id: &str) -> Option<ureq::Agent> {
+        self.bind_for(member_id).map(|e| {
+            e.ureq_agent
+                .get_or_init(|| ureq_agent_for(&e.url))
+                .clone()
+        })
+    }
+
+    /// 绑定核心：选定出口（粘性/重分配/整池复位），返回条目克隆。
+    fn bind_for(&self, member_id: &str) -> Option<ProxyEntry> {
         let mut inner = self.inner.lock().ok()?;
-        // 出口快照收 owned（url+client）：MutexGuard 经 Deref 不分裂字段借用，
-        // 持 &ProxyEntry 期间无法 mutate bindings
-        let mut alive_urls: Vec<(String, reqwest::Client)> = Self::alive(&inner)
-            .into_iter()
-            .map(|e| (e.url.clone(), e.client.clone()))
-            .collect();
+        // 出口快照收 owned：MutexGuard 经 Deref 不分裂字段借用
+        let alive: Vec<String> = Self::alive(&inner).into_iter().map(|e| e.url.clone()).collect();
+        let mut alive_urls = alive;
         if alive_urls.is_empty() {
             Self::reset(&mut inner);
-            alive_urls = Self::alive(&inner)
-                .into_iter()
-                .map(|e| (e.url.clone(), e.client.clone()))
-                .collect();
+            alive_urls = Self::alive(&inner).into_iter().map(|e| e.url.clone()).collect();
         }
         // 粘性：已有绑定且出口可用 → 直接复用（账号不跳 IP）
         if inner.sticky {
             if let Some(u) = inner.bindings.get(member_id).cloned() {
                 if !Self::dead(&inner, &u) && !Self::cooling(&inner, &u) {
                     if let Some(e) = inner.entries.iter().find(|e| e.url == u) {
-                        return Some(e.client.clone());
+                        return Some(e.clone());
                     }
                 }
             }
         }
         // 走到这里必然重新分配：无绑定 / 绑定死 / 冷却中 / 粘性关闭
         inner.bindings.remove(member_id);
-        let mut best: Option<(String, reqwest::Client)> = None;
+        let mut best: Option<String> = None;
         let mut best_n = usize::MAX;
-        for (u, c) in &alive_urls {
+        for u in &alive_urls {
             let n = Self::bind_count(&inner, u);
             if n < best_n {
-                best = Some((u.clone(), c.clone()));
+                best = Some(u.clone());
                 best_n = n;
             }
         }
-        let (u, c) = best?;
+        let u = best?;
         inner.bindings.insert(member_id.to_string(), u.clone());
         eprintln!(
             "[proxy] 账号 {member_id} → 出口 {}（在池 {}/{}）",
@@ -145,7 +177,7 @@ impl ProxyPool {
             alive_urls.len(),
             inner.entries.len()
         );
-        Some(c)
+        inner.entries.iter().find(|e| e.url == u).cloned()
     }
 
     /// IP 级风控（405/3012）：当前出口负分 + 进冷却窗口；迁移开启时该出口上
@@ -278,6 +310,19 @@ fn proxy_client(proxy_url: &str, connect_secs: u64) -> Result<reqwest::Client, r
         .build()
 }
 
+/// ureq 版出口 Agent（账号管理侧）：同一条代理串、带 socks5（Cargo feature socks-proxy）。
+/// httplog 记录层由调用方经 logged_agent 叠加（代理 Agent 本身只管出网）。
+fn ureq_agent_for(proxy_url: &str) -> ureq::Agent {
+    let proxy = ureq::Proxy::new(proxy_url).ok();
+    ureq::config::Config::builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        .proxy(proxy)
+        .build()
+        .into()
+}
+
 /// 日志脱敏：隐藏 user:pass（scheme://u:p@host:port → scheme://host:port）。
 fn mask_proxy(proxy_url: &str) -> String {
     if let Some(at) = proxy_url.rfind('@') {
@@ -294,19 +339,17 @@ mod tests {
     use super::*;
 
     fn pool(urls: &[&str], min_score: i32) -> ProxyPool {
-        let cfg = GatewayConfig {
-            proxy: ProxyConfig {
-                mode: "pool".into(),
-                single: String::new(),
-                proxies: urls.iter().map(|s| s.to_string()).collect(),
-                sticky_per_account: Some(true),
-                rotate_on_risk: Some(true),
-                risk_backoff_secs: Some(45),
-                min_score: Some(min_score),
-            },
-            ..Default::default()
+        let pc = ProxyConfig {
+            mode: "pool".into(),
+            single: String::new(),
+            proxies: urls.iter().map(|s| s.to_string()).collect(),
+            sticky_per_account: Some(true),
+            rotate_on_risk: Some(true),
+            risk_backoff_secs: Some(45),
+            min_score: Some(min_score),
+            scopes: Default::default(),
         };
-        ProxyPool::from_config(&cfg).expect("池装配失败")
+        ProxyPool::from_parts(&pc, 15).expect("池装配失败")
     }
 
     #[test]
@@ -369,14 +412,14 @@ mod tests {
 
     #[test]
     fn off_and_empty_configs_yield_none() {
-        let base = GatewayConfig::default();
-        assert!(ProxyPool::from_config(&base).is_none(), "mode 缺省 = off");
+        let base = ProxyConfig::default();
+        assert!(ProxyPool::from_parts(&base, 15).is_none(), "mode 缺省 = off");
         let mut single_empty = base.clone();
-        single_empty.proxy.mode = "single".into();
-        assert!(ProxyPool::from_config(&single_empty).is_none(), "single 空串 = off");
+        single_empty.mode = "single".into();
+        assert!(ProxyPool::from_parts(&single_empty, 15).is_none(), "single 空串 = off");
         let mut pool_empty = base.clone();
-        pool_empty.proxy.mode = "pool".into();
-        assert!(ProxyPool::from_config(&pool_empty).is_none(), "空池 = off");
+        pool_empty.mode = "pool".into();
+        assert!(ProxyPool::from_parts(&pool_empty, 15).is_none(), "空池 = off");
     }
 
     #[test]

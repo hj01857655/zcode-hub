@@ -48,12 +48,46 @@ pub struct GatewayConfig {
     /// 上游供应商清单（首个 = 默认上游，现有路由继续走它；结构为多上游预留）
     #[serde(default = "d_providers")]
     pub providers: Vec<ProviderConfig>,
-    /// 出网代理/池（405/3012 IP+指纹级风控的规避层）：mode=off 时零行为变化
-    #[serde(default)]
-    pub proxy: ProxyConfig,
+    // 出网代理/池已上移为应用级配置：落 gateway.json 顶层 `proxy` 键，
+    // 由 load_app_proxy/save_app_proxy 独占读写。GatewayConfig 不再持有该字段——
+    // save() 整体序列化重写文件，若保留字段会在落盘时用启动时的旧内存值覆盖设置页新存的 proxy 键。
+    // serde 对未知字段默认忽略：旧文件里的 proxy 键 load() 不受影响。
 }
 
-/// 出网代理/池配置。Option 字段缺省语义：None = 用内置默认
+/// 应用级出网代理配置读取：gateway.json 顶层 `proxy` 键（存储位置历史不变）。
+pub fn load_app_proxy() -> ProxyConfig {
+    let p = crate::Paths::detect().store_dir().join("gateway.json");
+    if p.exists() {
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                if let Some(px) = v.get("proxy") {
+                    return serde_json::from_value(px.clone()).unwrap_or_default();
+                }
+            }
+        }
+    }
+    ProxyConfig::default()
+}
+
+/// 应用级出网代理配置落盘：读 gateway.json 全文 → 改 proxy 键 → 原子写回。
+pub fn save_app_proxy(px: &ProxyConfig) -> Result<(), String> {
+    let p = crate::Paths::detect().store_dir().join("gateway.json");
+    let mut root: serde_json::Value = if p.exists() {
+        let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+    root["proxy"] = serde_json::to_value(px).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 出网代理/池配置（应用级：网关转发与账号管理投放/领取/探测共用）。
+/// Option 字段缺省语义：None = 用内置默认
 ///（粘性=true、风控迁移=true、min_score=-2、风控冷却=45s）。
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ProxyConfig {
@@ -74,6 +108,29 @@ pub struct ProxyConfig {
     pub risk_backoff_secs: Option<u64>,
     /// 出口健康分下限（默认 -2，触底踢出轮转）
     pub min_score: Option<i32>,
+    /// 各用途是否走池（None = 用途默认）。scope 键：
+    /// gateway（网关转发，默认开）/ claim（领取+打卡+邀请，默认开）/
+    /// deploy（投放校验+账号额度查询，默认开）/ oauth（授权登录链路，默认开：
+    /// z.ai 国际版必须走代理；登录窗口 webview 另有独立单代理配置）
+    #[serde(default)]
+    pub scopes: std::collections::HashMap<String, bool>,
+}
+
+impl ProxyConfig {
+    /// 用途开关判定：显式配置优先，否则默认全开（z.ai 国际版授权登录必须走代理）。
+    pub fn scope_enabled(&self, scope: &str) -> bool {
+        if let Some(v) = self.scopes.get(scope) {
+            return *v;
+        }
+        // 兼容存量配置：旧 scope 名 `probe` 等价 `deploy`（改名前的落盘文件可直读）
+        if scope == "deploy" {
+            if let Some(v) = self.scopes.get("probe") {
+                return *v;
+            }
+        }
+        // 默认全开（z.ai 国际版授权登录必须走代理）
+        matches!(scope, "gateway" | "claim" | "deploy" | "oauth")
+    }
 }
 
 /// 上游供应商：magpie 式供应商页的数据模型——条目可展开、可拉模型、可右键测试
@@ -129,14 +186,12 @@ impl Default for GatewayConfig {
             keepalive_secs: d_keepalive(),
             total_timeout_secs: d_total_timeout(),
             auto_start: false,
-            // 默认全放行：网关绑 127.0.0.1，空列表会把所有浏览器跨源
             // （Vite dev 5173 等）的预检全拒掉。要收紧走配置面 cors_origins。
             cors_origins: vec!["*".to_string()],
             body_limit_mb: d_body_limit(),
             log_to_disk: d_true(),
             log_file_max_mb: d_log_max(),
             providers: d_providers(),
-            proxy: ProxyConfig::default(),
         }
     }
 }
@@ -160,8 +215,24 @@ impl GatewayConfig {
 
     pub fn save(&self) -> Result<(), String> {
         let p = Self::path();
+        // proxy 键归 save_app_proxy 独占：整体序列化重写文件时从磁盘带回，
+        // 避免这份不含 proxy 的结构把设置页存的代理配置抹掉
+        let mut root: serde_json::Value = if p.exists() {
+            std::fs::read_to_string(&p)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        if let Some(px) = root.get("proxy").cloned() {
+            root = serde_json::to_value(self).map_err(|e| e.to_string())?;
+            root["proxy"] = px;
+        } else {
+            root = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        }
         let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?)
+        std::fs::write(&tmp, serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
         Ok(())

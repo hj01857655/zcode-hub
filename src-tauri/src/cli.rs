@@ -140,8 +140,8 @@ pub fn run(args: &[String]) -> (String, i32) {
             };
             match switch_to(&paths, &id, force, restart, hot) {
                 Ok(r) => {
-                    if let Some(p) = &r.probe {
-                        let msg = crate::probe::probe_message(p);
+                    if let Some(p) = &r.verify {
+                        let msg = crate::deploy::verify_message(p);
                         if !msg.is_empty() {
                             eprintln!("{msg}");
                         }
@@ -176,7 +176,7 @@ pub fn run(args: &[String]) -> (String, i32) {
             let mut items = vec![];
             for acc in accounts.iter().filter(|a| only.as_deref().map_or(true, |id| id == a.id)) {
                 let res = ensure_virtual_device_mid(&paths, &acc.id).and_then(|mid| {
-                    crate::claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+                    crate::claim::claimable_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid), &acc.id)
                 });
                 match res {
                     Ok(plans) => {
@@ -204,8 +204,8 @@ pub fn run(args: &[String]) -> (String, i32) {
             };
             let res = ensure_virtual_device_mid(&paths, &id).and_then(|mid| {
                 let acc = load_account(&paths, &id)?;
-                let summary = crate::referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
-                let invitees = crate::referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid)).unwrap_or(Value::Null);
+                let summary = crate::referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()), &id)?;
+                let invitees = crate::referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid), &id).unwrap_or(Value::Null);
                 Ok(json!({ "id": acc.id, "name": acc.name, "summary": summary.get("data").cloned().unwrap_or(Value::Null), "invitees": invitees.get("data").cloned().unwrap_or(Value::Null) }))
             });
             match res {

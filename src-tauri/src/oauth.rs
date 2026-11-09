@@ -476,13 +476,22 @@ pub const START_PLAN_ANTHROPIC_BASE: &str = "https://zcode.z.ai/api/v1/zcode-pla
 const API_KEY_NAME: &str = "zcode-api-key";
 
 fn web_agent() -> ureq::Agent {
-    // 统一记录层：oauth 全链（init/poll/token 兑换/userinfo）经 httplog 共享 Agent，
-    // 中间件自动落 flowlog，系统日志页可查
-    crate::httplog::logged_agent(15)
+    // oauth 全链（init/poll/token 兑换/userinfo）走应用级代理池 scope=oauth（z.ai 国际版
+    // 必须走代理）：登录流程无账号上下文，固定粘性 key "oauth" 绑同一出口，整条流程
+    // 单 IP 一致；池关/该 scope 关回落直连 logged_agent。中间件自动落 flowlog，系统日志页可查
+    crate::claim::app_proxy_agent("oauth", "oauth", 15)
+        .unwrap_or_else(|| crate::httplog::logged_agent(15))
 }
 
 /// 按超时档位取共享 Agent：同档位进程内单例（不同超时档各建一个池）。
 fn web_agent_with(timeout_secs: u64) -> ureq::Agent {
+    // 池 Agent 超时固定 connect 10s / global 30s；长档位（>30s）池代理会掐断长轮询，
+    // 该档位回落直连
+    if timeout_secs <= 30 {
+        if let Some(a) = crate::claim::app_proxy_agent("oauth", "oauth", timeout_secs) {
+            return a;
+        }
+    }
     static AGENTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, ureq::Agent>>> =
         std::sync::OnceLock::new();
     let map = AGENTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));

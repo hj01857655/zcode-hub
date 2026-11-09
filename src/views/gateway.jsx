@@ -54,13 +54,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const [keepaliveInput, setKeepaliveInput] = useState("");
   const [timeoutInput, setTimeoutInput] = useState("");
   // 代理池表单：mode 三态（off/single/pool），pool 用多行文本域每行一条
-  const [proxyModeInput, setProxyModeInput] = useState("off");
-  const [proxySingleInput, setProxySingleInput] = useState("");
-  const [proxyProxiesInput, setProxyProxiesInput] = useState("");
-  const [proxyStickyInput, setProxyStickyInput] = useState(true);
-  const [proxyRotateInput, setProxyRotateInput] = useState(true);
-  const [proxyRiskBackoffInput, setProxyRiskBackoffInput] = useState("");
-  const [proxyMinScoreInput, setProxyMinScoreInput] = useState("");
+  // 出网代理池配置统一在设置页维护；网关页仅展示状态摘要（proxyStats）
   // 用户是否动过 key/端点输入框：没动过就跟随盘上真值（启动/换号后 key 会变），动过则尊重输入
   const keyTouched = useRef(false);
   const epTouched = useRef(false);
@@ -129,13 +123,6 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         setTimeoutInput((v) => v || String(s?.totalTimeoutSecs ?? ""));
         setLogDiskInput(s?.logToDisk !== false);
         setStickyInput(s?.sticky !== false);
-        setProxyModeInput((v) => v || s?.proxyMode || "off");
-        setProxySingleInput((v) => v || s?.proxySingle || "");
-        setProxyProxiesInput((v) => v || (s?.proxyProxies || []).join("\n"));
-        setProxyStickyInput(s?.proxySticky !== false);
-        setProxyRotateInput(s?.proxyRotate !== false);
-        setProxyRiskBackoffInput((v) => v || String(s?.proxyRiskBackoffSecs ?? ""));
-        setProxyMinScoreInput((v) => v || String(s?.proxyMinScore ?? ""));
       }
     } catch (e) {
       setErr(String(e));
@@ -198,14 +185,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     status.sticky !== stickyInput ||
     String(status.allowedFails ?? "") !== failsInput.trim() ||
     String(status.keepaliveSecs ?? "") !== keepaliveInput.trim() ||
-    String(status.totalTimeoutSecs ?? "") !== timeoutInput.trim() ||
-    (status.proxyMode || "off") !== proxyModeInput ||
-    (status.proxySingle || "") !== proxySingleInput.trim() ||
-    (status.proxyProxies || []).join("\n") !== proxyProxiesInput.split("\n").map((s) => s.trim()).filter(Boolean).join("\n") ||
-    (status.proxySticky ?? true) !== proxyStickyInput ||
-    (status.proxyRotate ?? true) !== proxyRotateInput ||
-    String(status.proxyRiskBackoffSecs ?? "") !== proxyRiskBackoffInput.trim() ||
-    String(status.proxyMinScore ?? "") !== proxyMinScoreInput.trim()
+    String(status.totalTimeoutSecs ?? "") !== timeoutInput.trim()
   );
   // busy 是全局闸门；供应商动作额外用 provBusy 钉住自己的按钮/右键/重测，
   // 避免测试弹窗开着时连点发出多条上游请求
@@ -265,14 +245,6 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
       allowedFails: Number.isFinite(parseInt(failsInput.trim(), 10)) ? Math.max(0, parseInt(failsInput.trim(), 10)) : null,
       keepaliveSecs: Number.isFinite(parseInt(keepaliveInput.trim(), 10)) ? Math.max(0, parseInt(keepaliveInput.trim(), 10)) : null,
       totalTimeoutSecs: Number.isFinite(parseInt(timeoutInput.trim(), 10)) ? Math.max(0, parseInt(timeoutInput.trim(), 10)) : null,
-      // 代理池整组随表单提交（proxySingle/proxyProxies 传空 = 显式清空）
-      proxyMode: ["off", "single", "pool"].includes(proxyModeInput) ? proxyModeInput : null,
-      proxySingle: proxySingleInput.trim(),
-      proxyProxies: proxyProxiesInput.split("\n").map((s) => s.trim()).filter(Boolean),
-      proxySticky: proxyStickyInput,
-      proxyRotate: proxyRotateInput,
-      proxyRiskBackoffSecs: Number.isFinite(parseInt(proxyRiskBackoffInput.trim(), 10)) ? Math.max(0, parseInt(proxyRiskBackoffInput.trim(), 10)) : null,
-      proxyMinScore: proxyMinScoreInput.trim() !== "" && Number.isFinite(parseInt(proxyMinScoreInput.trim(), 10)) ? parseInt(proxyMinScoreInput.trim(), 10) : null,
     });
     setTuneOpen(false);
     if (running) setSavedRestart(true);
@@ -605,71 +577,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
                 </div>
               </div>
               </div>
-              {/* 出网代理池：mode 三态切换，single 单行 / pool 多行文本域；数值与开关仅 mode≠off 时显示 */}
-              <div className="x-tune-section">
-              <label>{t("x.tuneGroupProxy")}</label>
-              <div className="lang-seg" style={{ width: "fit-content", marginBottom: 8 }}>
-                {["off", "single", "pool"].map((m) => (
-                  <button key={m} className={"lang-opt" + (proxyModeInput === m ? " on" : "")}
-                    onClick={() => setProxyModeInput(m)}>{m}</button>
-                ))}
-              </div>
-              {proxyModeInput === "single"
-                ? <div className="x-tune">
-                    <div className="x-tune-item x-tune-wide">
-                      <span className="x-tune-name">{t("x.proxySingle")}</span>
-                      <input className="zcode-path" type="text" value={proxySingleInput}
-                        onChange={(e) => setProxySingleInput(e.target.value)}
-                        placeholder="http://user:pass@host:port / socks5://…" />
-                    </div>
-                  </div>
-                : null}
-              {proxyModeInput === "pool"
-                ? <div className="x-tune-item x-tune-wide" style={{ marginBottom: 8 }}>
-                    <span className="x-tune-name">{t("x.proxyProxies")}</span>
-                    <textarea className="zcode-path" rows={4} value={proxyProxiesInput}
-                      onChange={(e) => setProxyProxiesInput(e.target.value)}
-                      placeholder={"http://user:pass@host:port\nsocks5://user:pass@host:port"} />
-                  </div>
-                : null}
-              {proxyModeInput !== "off"
-                ? <>
-                    <div className="x-tune">
-                      <div className="x-tune-item">
-                        <span className="x-tune-name">{t("x.proxyRiskBackoff")}</span>
-                        <input className="zcode-path" type="text" inputMode="numeric" value={proxyRiskBackoffInput}
-                          onChange={(e) => setProxyRiskBackoffInput(e.target.value)} placeholder="45" />
-                      </div>
-                      <div className="x-tune-item">
-                        <span className="x-tune-name">{t("x.proxyMinScore")}</span>
-                        <input className="zcode-path" type="text" inputMode="numeric" value={proxyMinScoreInput}
-                          onChange={(e) => setProxyMinScoreInput(e.target.value)} placeholder="-2" />
-                      </div>
-                    </div>
-                    <div className="x-tune-switch">
-                      <div className="x-tune-item">
-                        <span className="x-tune-name">{t("x.proxySticky")}</span>
-                        <button className={"tog-inline" + (proxyStickyInput ? " on" : "")} role="switch" aria-checked={proxyStickyInput}
-                          title={t("x.proxyStickyHint")}
-                          onClick={() => setProxyStickyInput(!proxyStickyInput)}>
-                          <span className={"toggle" + (proxyStickyInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
-                          {proxyStickyInput ? t("x.stickyOn") : t("x.stickyOff")}
-                        </button>
-                      </div>
-                      <div className="x-tune-item">
-                        <span className="x-tune-name">{t("x.proxyRotate")}</span>
-                        <button className={"tog-inline" + (proxyRotateInput ? " on" : "")} role="switch" aria-checked={proxyRotateInput}
-                          title={t("x.proxyRotateHint")}
-                          onClick={() => setProxyRotateInput(!proxyRotateInput)}>
-                          <span className={"toggle" + (proxyRotateInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
-                          {proxyRotateInput ? t("x.tuneLogOn") : t("x.tuneLogOff")}
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                : null}
-              <div className="hint">{t("x.proxyHint")}</div>
-              </div>
+              <div className="hint">{t("x.proxyHintNowInSettings")}</div>
               <div className="pv-actions">
                 <button className="btn-ghost" onClick={() => setTuneOpen(false)}>{t("common.cancel")}</button>
                 <button className="btn-primary" disabled={!tuneDirty || busy} onClick={doSaveTune}>
