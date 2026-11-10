@@ -44,6 +44,17 @@ impl AppProxy {
         px.as_ref()?.agent_for(member_id)
     }
 
+    /// 按用途取粘性出口的代理 URL（登录窗口 webview 用）：mode=off / 该用途关 / 池空 → None。
+    pub fn url_for(&self, scope: &str, member_id: &str) -> Option<String> {
+        let cfg = self.cfg.lock().ok()?;
+        if cfg.mode.is_empty() || cfg.mode == "off" || !cfg.scope_enabled(scope) {
+            return None;
+        }
+        drop(cfg);
+        let px = self.pool.lock().ok()?;
+        px.as_ref()?.url_for(member_id)
+    }
+
     /// reqwest 版（网关转发专用路径，保持原 client_for 语义）。
     pub fn client_for(&self, member_id: &str) -> Option<reqwest::Client> {
         let cfg = self.cfg.lock().ok()?;

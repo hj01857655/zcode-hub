@@ -52,6 +52,21 @@ function ThemeSeg({ cur, onPick }) {
   );
 }
 
+function CloseSeg({ cur, onPick }) {
+  return (
+    <div className="tog-row">
+      <div className="tog-info">
+        <div className="tog-label">{t("s.closeBehavior")}</div>
+        <div className="tog-desc">{t("s.closeBehaviorDesc")}</div>
+      </div>
+      <div className="lang-seg" role="radiogroup" aria-label={t("s.closeBehavior")}>
+        <button className={"lang-opt" + (cur === "min" ? " on" : "")} role="radio" aria-checked={cur === "min"} onClick={() => onPick("min")}>{t("s.closeBehaviorMin")}</button>
+        <button className={"lang-opt" + (cur === "exit" ? " on" : "")} role="radio" aria-checked={cur === "exit"} onClick={() => onPick("exit")}>{t("s.closeBehaviorExit")}</button>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage({ embedded = false, initialState = null, visible = true }) {
   // 主窗口已拉过同一份 get_state，直接作初始值，避免打开时白等一轮文件 IO
   const [state, setState] = useState(initialState);
@@ -66,12 +81,11 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
     return () => window.removeEventListener("zcs-theme", f);
   }, []);
   const pickTheme = setTheme;
-  const [proxyInput, setProxyInput] = useState("");
   const pathElRef = useRef(null);
-  const proxyElRef = useRef(null);
   // 出网代理池（应用级）：mode 三态 + 出口清单 + 用途开关。配置与运行态来自 proxy_settings_get
   const [pxForm, setPxForm] = useState({ mode: "off", single: "", proxies: "", sticky: true, rotate: true, riskBackoff: "", minScore: "", scopes: { gateway: true, claim: true, deploy: true, oauth: true } });
   const [pxStats, setPxStats] = useState([]);
+  const [pxDirty, setPxDirty] = useState(false);
   const pxDirtyRef = useRef(false);
   const pxLoadedRef = useRef(false);
   const busy = useRef(false);
@@ -131,7 +145,6 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
     setState(s);
     // 输入框聚焦时不覆盖：state-changed 可能在用户打字途中到来（切换/领取等后台动作）
     if (document.activeElement !== pathElRef.current) setPathInput(s.zcode_path || "");
-    if (document.activeElement !== proxyElRef.current) setProxyInput(s.auth_proxy_url || "");
     setAutostart(auto);
     if (s?.language) syncLang(s.language);
     // 出网代理：聚焦代理串输入框时不覆盖（与 path/auth proxy 同一防抖语义）
@@ -256,9 +269,25 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
       });
     },
 
+    setCloseBehavior: (mode) => {
+      const k = "close_to_tray";
+      const next = mode === "min";
+      if (readOpt(k) === next) return;
+      optRef.current[k] = next;
+      setState((v) => ({ ...v, [k]: next }));
+      enqueueToggle(async () => {
+        await invoke("set_behavior", {
+          launchAfterSwitch: null,
+          closeToTray: next,
+          hotSwitch: null,
+        });
+        delete optRef.current[k];
+      });
+    },
+
     // 出网代理池：保存即整池重建（网关与账号管理同时生效，无需重启网关）
     pxSet: (patch) => setPxForm((v) => ({ ...v, ...patch })),
-    pxMarkDirty: () => { pxDirtyRef.current = true; },
+    pxMarkDirty: () => { pxDirtyRef.current = true; setPxDirty(true); },
     pxSave: () => guard(async () => {
       const f = pxForm;
       await invoke("proxy_settings_save", {
@@ -272,6 +301,7 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
         scopes: f.scopes,
       });
       pxDirtyRef.current = false;
+      setPxDirty(false);
       toast(t("s.pxSaved"));
       await refresh();
     }),
@@ -310,27 +340,6 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
       await refresh();
     }),
 
-    toggleAuthProxy: () => {
-      const next = !readOpt("auth_proxy_on");
-      optRef.current.auth_proxy_on = next;
-      setState((v) => ({ ...v, auth_proxy_on: next }));
-      enqueueToggle(async () => {
-        await invoke("set_auth_proxy", {
-          on: next,
-          url: proxyInput.trim() || stateRef.current.auth_proxy_url || null,
-        });
-        delete optRef.current.auth_proxy_on;
-        toast(next ? t("s.proxyOnToast") : t("s.proxyOffToast"), "ok", t("s.proxyOnDetail"));
-      });
-    },
-
-    saveProxy: () => guard(async () => {
-      // 读 stateRef 而非闭包里的 s：开关可能还在队列里写盘，闭包值是旧一拍
-      const on = stateRef.current.auth_proxy_on;
-      await invoke("set_auth_proxy", { on, url: proxyInput.trim() });
-      await refresh();
-      toast(t("s.proxySaved"), "ok", on ? t("s.proxySavedOn") : t("s.proxySavedOff"));
-    }),
 
   };
 
@@ -351,80 +360,84 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
           <label>{t("s.behaviorLabel")}</label>
           <Toggle on={autostart} label={t("s.autostart")} desc={t("s.autostartDesc")} onClick={actions.toggleAutostart} />
           <Toggle on={s.launch_after_switch} label={t("s.launchAfter")} desc={t("s.launchAfterDesc")} onClick={() => actions.toggleBehavior("launch")} />
-          <Toggle on={s.close_to_tray} label={t("s.closeTray")} desc={t("s.closeTrayDesc")} onClick={() => actions.toggleBehavior("tray")} />
+          <CloseSeg cur={s.close_to_tray ? "min" : "exit"} onPick={actions.setCloseBehavior} />
           <Toggle on={s.hot_switch} label={t("s.hotSwitch")} desc={t("s.hotSwitchDesc")} onClick={() => actions.toggleBehavior("hot")} />
         </div>
         <div className="set-card">
-          <label>{t("s.authLabel")}</label>
-          <Toggle on={s.auth_proxy_on} label={t("s.proxyToggle")} desc={t("s.proxyToggleDesc")} onClick={actions.toggleAuthProxy} />
-          <div className="path-line">
-            <input ref={proxyElRef} className="zcode-path auth-proxy" type="text" value={proxyInput}
-              placeholder={t("s.proxyPh")}
-              onChange={(e) => setProxyInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") actions.saveProxy(); }} />
-            <button className="btn-ghost" onClick={actions.saveProxy}>{t("common.save")}</button>
-          </div>
-        </div>
-        <div className="set-card">
           <label>{t("s.pxLabel")}</label>
-          <div className="tog-row">
-            <div className="tog-info"><div className="tog-label">{t("s.pxMode")}</div></div>
-            <div className="lang-seg" style={{ width: "fit-content" }} role="radiogroup" aria-label={t("s.pxMode")}>
-              {["off", "single", "pool"].map((m) => (
-                <button key={m} className={"lang-opt" + (pxForm.mode === m ? " on" : "")} role="radio" aria-checked={pxForm.mode === m}
-                  title={t(m === "off" ? "s.pxModeOffDesc" : m === "single" ? "s.pxModeSingleDesc" : "s.pxModePoolDesc")}
-                  onClick={() => { actions.pxMarkDirty(); actions.pxSet({ mode: m }); }}>{t(m === "off" ? "s.pxModeOff" : m === "single" ? "s.pxModeSingle" : "s.pxModePool")}</button>
-              ))}
+          <div className="px-sec">
+            <div className="px-sec-title">{t("s.pxSecEgress")}</div>
+            <div className="tog-row">
+              <div className="tog-info"><div className="tog-label">{t("s.pxMode")}</div></div>
+              <div className="lang-seg" role="radiogroup" aria-label={t("s.pxMode")}>
+                {["off", "single", "pool"].map((m) => (
+                  <button key={m} className={"lang-opt" + (pxForm.mode === m ? " on" : "")} role="radio" aria-checked={pxForm.mode === m}
+                    title={t(m === "off" ? "s.pxModeOffDesc" : m === "single" ? "s.pxModeSingleDesc" : "s.pxModePoolDesc")}
+                    onClick={() => { actions.pxMarkDirty(); actions.pxSet({ mode: m }); }}>{t(m === "off" ? "s.pxModeOff" : m === "single" ? "s.pxModeSingle" : "s.pxModePool")}</button>
+                ))}
+              </div>
             </div>
+            <div className="px-sec-note">{t(pxForm.mode === "off" ? "s.pxModeOffDesc" : pxForm.mode === "single" ? "s.pxModeSingleDesc" : "s.pxModePoolDesc")}</div>
+            {pxForm.mode === "single" ? (
+              <label className="px-field">
+                <span>{t("s.pxFSingle")}</span>
+                <input className="zcode-path" type="text" value={pxForm.single}
+                  placeholder={t("s.pxProxiesPh").split("\n")[0]}
+                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ single: e.target.value }); }} />
+              </label>
+            ) : null}
+            {pxForm.mode === "pool" ? (
+              <label className="px-field">
+                <span>{t("s.pxFProxies")}</span>
+                <textarea className="zcode-path" rows={4} value={pxForm.proxies}
+                  placeholder={t("s.pxProxiesPh")}
+                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ proxies: e.target.value }); }} />
+                <div className="hint">{t("s.pxFProxiesHint")}</div>
+              </label>
+            ) : null}
           </div>
-          {pxForm.mode === "single" ? (
-            <div className="path-line">
-              <input className="zcode-path auth-proxy" type="text" value={pxForm.single}
-                placeholder={t("s.pxProxiesPh").split("\n")[0]}
-                onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ single: e.target.value }); }} />
-            </div>
-          ) : null}
-          {pxForm.mode === "pool" ? (
-            <div className="path-line" style={{ display: "block" }}>
-              <label className="tog-label" style={{ marginBottom: 4 }}>{t("s.pxFProxies")}</label>
-              <textarea className="zcode-path" rows={4} style={{ width: "100%" }} value={pxForm.proxies}
-                placeholder={t("s.pxProxiesPh")}
-                onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ proxies: e.target.value }); }} />
+          {pxForm.mode !== "off" ? (
+            <div className="px-sec">
+              <div className="px-sec-title">{t("s.pxSecPolicy")}</div>
+              <div className="px-fields">
+                <label className="px-field">
+                  <span>{t("s.pxFRiskBackoff")}</span>
+                  <input className="zcode-path" type="text" inputMode="numeric" value={pxForm.riskBackoff}
+                    placeholder="45" onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ riskBackoff: e.target.value }); }} />
+                  <div className="hint">{t("s.pxFRiskBackoffHint")}</div>
+                </label>
+                <label className="px-field">
+                  <span>{t("s.pxFMinScore")}</span>
+                  <input className="zcode-path" type="text" inputMode="numeric" value={pxForm.minScore}
+                    placeholder="-2" onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ minScore: e.target.value }); }} />
+                  <div className="hint">{t("s.pxFMinScoreHint")}</div>
+                </label>
+              </div>
+              <Toggle on={pxForm.sticky !== false} label={t("s.pxFSticky")} desc={t("s.pxFStickyHint")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ sticky: pxForm.sticky === false }); }} />
+              <Toggle on={pxForm.rotate !== false} label={t("s.pxFRotate")} desc={t("s.pxFRotateHint")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ rotate: pxForm.rotate === false }); }} />
             </div>
           ) : null}
           {pxForm.mode !== "off" ? (
-            <>
-              <div className="tog-row">
-                <div className="tog-info"><div className="tog-label">{t("s.pxFSticky")}</div><div className="hint">{t("s.pxFStickyHint")}</div></div>
-                <Toggle on={pxForm.sticky !== false} label={t("s.pxFSticky")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ sticky: pxForm.sticky === false }); }} />
-              </div>
-              <div className="tog-row">
-                <div className="tog-info"><div className="tog-label">{t("s.pxFRotate")}</div><div className="hint">{t("s.pxFRotateHint")}</div></div>
-                <Toggle on={pxForm.rotate !== false} label={t("s.pxFRotate")} onClick={() => { actions.pxMarkDirty(); actions.pxSet({ rotate: pxForm.rotate === false }); }} />
-              </div>
-              <div className="path-line">
-                <input className="zcode-path" type="text" inputMode="numeric" style={{ width: 120 }} value={pxForm.riskBackoff}
-                  placeholder={t("s.pxFRiskBackoff")} title={t("s.pxFRiskBackoffHint")}
-                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ riskBackoff: e.target.value }); }} />
-                <input className="zcode-path" type="text" inputMode="numeric" style={{ width: 120 }} value={pxForm.minScore}
-                  placeholder={t("s.pxFMinScore")} title={t("s.pxFMinScoreHint")}
-                  onChange={(e) => { actions.pxMarkDirty(); actions.pxSet({ minScore: e.target.value }); }} />
-              </div>
-              {["gateway", "claim", "deploy", "oauth"].map((sc) => (
-                <div className="tog-row" key={sc}>
-                  <div className="tog-info"><div className="tog-label">{t(`s.pxScope_${sc}`)}</div><div className="hint">{t(`s.pxScope_${sc}Desc`)}</div></div>
-                  <Toggle on={pxForm.scopes[sc] !== false}
-                    label={t(`s.pxScope_${sc}`)}
+            <div className="px-sec">
+              <div className="px-sec-title">{t("s.pxSecScopes")}</div>
+              <div className="px-scopes">
+                {["gateway", "claim", "deploy", "oauth"].map((sc) => (
+                  <Toggle key={sc} on={pxForm.scopes[sc] !== false}
+                    label={t(`s.pxScope_${sc}`)} desc={t(`s.pxScope_${sc}Desc`)}
                     onClick={() => { actions.pxMarkDirty(); actions.pxSet({ scopes: { ...pxForm.scopes, [sc]: !(pxForm.scopes[sc] ?? true) } }); }} />
-                </div>
-              ))}
-            </>
+                ))}
+              </div>
+            </div>
           ) : null}
-          <div className="path-line">
-            <button className="btn-ghost" onClick={actions.pxSave}>{t("common.save")}</button>
+          <div className="px-save-row">
+            <button className="btn-ghost" onClick={actions.pxSave}>{t("s.pxSave")}</button>
+            {pxDirty ? <span className="px-dirty">{t("s.pxDirty")}</span> : <span className="px-saved">{t("s.pxSavedState")}</span>}
           </div>
           {pxStats.length > 0 ? (
-            <div className="hint">{t("s.pxStats", { total: pxStats.length, cooling: pxStats.filter((p) => p.cooling).length })}</div>
+            <div className="px-stats">
+              <span className="px-stat">{t("s.pxStatTotal", { n: pxStats.length })}</span>
+              <span className={"px-stat" + (pxStats.filter((p) => p.cooling).length > 0 ? " warn" : "")}>{t("s.pxStatCooling", { n: pxStats.filter((p) => p.cooling).length })}</span>
+            </div>
           ) : null}
           <div className="hint">{t("s.pxHint")}</div>
         </div>

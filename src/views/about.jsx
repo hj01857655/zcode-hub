@@ -129,13 +129,13 @@ export default function AboutPage() {
           <span className="about-tagline">{t("a.tagline")}</span>
         </div>
 
-        <div className="about-block about-upd">
-          <div className="about-label">{t("a.updLabel")}</div>
+        <div className="about-block about-upd ui-sec first">
+          <div className="ui-sec-title">{t("a.updLabel")}</div>
           <div className="about-upd-row">{updRow}</div>
         </div>
 
-        <div className="about-block">
-          <div className="about-label">{t("a.featLabel")}</div>
+        <div className="about-block ui-sec">
+          <div className="ui-sec-title">{t("a.featLabel")}</div>
           <div className="about-feats">
             <Feature title={t("a.feat1t")} desc={t("a.feat1d")} />
             <Feature title={t("a.feat2t")} desc={t("a.feat2d")} />
@@ -144,8 +144,8 @@ export default function AboutPage() {
           </div>
         </div>
 
-        <div className="about-block">
-          <div className="about-label">{t("a.safetyLabel")}</div>
+        <div className="about-block ui-sec">
+          <div className="ui-sec-title">{t("a.safetyLabel")}</div>
           <p>{t("s.hint")}</p>
           <p>{t("a.safetyDetail")}</p>
         </div>

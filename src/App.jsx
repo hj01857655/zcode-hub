@@ -224,10 +224,10 @@ function RenameRow({ a, isActive }) {
         <div className="row-meta">{t("btn.renameMeta")}</div>
       </div>
       <div className="row-actions">
-        <button className="btn-ghost" style={{ padding: "4px 10px" }} onClick={() => actions.doRename(a.id)}>
+        <button className="btn-ghost btn-mini" onClick={() => actions.doRename(a.id)}>
           {t("common.save")}
         </button>
-        <button className="btn-ghost" style={{ padding: "4px 10px" }} onClick={() => actions.cancelRename()}>
+        <button className="btn-ghost btn-mini" onClick={() => actions.cancelRename()}>
           {t("common.cancel")}
         </button>
       </div>
@@ -324,11 +324,10 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
 
 function EmptyState() {
   return (
-    <div className="empty">
-      <div className="glyph"><Ic name="empty" size={34} /></div>
-      {t("m.emptyTitle")}
-      <br />
-      {t("m.emptyBody")}
+    <div className="ui-empty">
+      <Ic name="empty" size={30} />
+      <div className="ui-empty-title">{t("m.emptyTitle")}</div>
+      <div className="ui-empty-desc">{t("ui.emptyAccounts")}</div>
     </div>
   );
 }
@@ -381,7 +380,7 @@ export default function App() {
   // 额度槽塌缩（行高骤减）时会算出负偏移被浏览器钳到顶部，即「自动回顶」，故整体移除。
 
   if (store.bootError) {
-    return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: store.bootError })}</div>;
+    return <div className="loading err">{t("common.loadFail", { e: store.bootError })}</div>;
   }
   if (!s.state) return <div className="loading">{t("common.loading")}</div>;
 

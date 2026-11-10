@@ -166,20 +166,34 @@ export default function SysLogPage() {
         <span className="tb-spacer" />
       </section>
       <section className="settings open">
-        <div className="x-ls-filters">
+        <div className="ui-sec">
+          <div className="ui-sec-title">
+            <span>{t("sl.title")}</span>
+            <span className="ui-sec-extra">{t("ui.secFilters")}</span>
+          </div>
+          <div className="x-ls-filters">
           <input className="zcode-path x-ls-search" type="text" value={q}
             onChange={(e) => setQ(e.target.value)} placeholder={t("sl.searchPh")} />
           <select className="zcode-path" value={flowFilter} onChange={(e) => setFlowFilter(e.target.value)}>
             {flows.map((f) => <option key={f} value={f}>{f === "all" ? t("sl.allFlows") : f}</option>)}
           </select>
-        </div>
-        {err
-          ? <div className="dash-empty">{err}</div>
-          : filtered.length
-            ? <div className="x-log-list">
-                {filtered.map((p, i) => <TextRow key={`t${i}`} p={p} />)}
+          </div>
+          {err
+            ? <div className="ui-empty err">
+                <Ic name="empty" size={26} />
+                <div className="ui-empty-title">{t("ui.emptyTitle")}</div>
+                <div className="ui-empty-desc">{err}</div>
               </div>
-            : <div className="dash-empty">{t("sl.empty")}</div>}
+            : filtered.length
+              ? <div className="x-log-list">
+                  {filtered.map((p, i) => <TextRow key={`t${i}`} p={p} />)}
+                </div>
+              : <div className="ui-empty">
+                  <Ic name="empty" size={26} />
+                  <div className="ui-empty-title">{t("ui.emptyTitle")}</div>
+                  <div className="ui-empty-desc">{t("sl.empty")}</div>
+                </div>}
+        </div>
       </section>
     </>
   );

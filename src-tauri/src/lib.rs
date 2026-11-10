@@ -703,12 +703,21 @@ async fn oauth_begin(app: AppHandle, provider: String, browser: Option<bool>) ->
     if !oauth::OAUTH_PROVIDERS.iter().any(|p| p.id == provider) {
         return Err(i18n::trf("err.oauth.unknown_provider", &[("provider", &provider)]));
     }
+    // 登录窗口 webview 的出口：独立单代理（存量兼容）优先，否则走应用级代理池
+    // 的 oauth scope（固定粘性 key，整条登录流程单 IP 一致）。
     let proxy_url: Option<tauri::Url> = match load_settings(&Paths::detect()).auth_proxy() {
-        Some(p) => {
-            let norm = oauth::parse_proxy_url(p)?;
-            Some(norm.parse::<tauri::Url>().map_err(|e| i18n::trf("err.proxy.invalid", &[("e", &e.to_string())]))?)
+        Some(p) => Some(
+            oauth::parse_proxy_url(p)?
+                .parse::<tauri::Url>()
+                .map_err(|e| i18n::trf("err.proxy.invalid", &[("e", &e.to_string())]))?,
+        ),
+        None => {
+            let ap = app.state::<std::sync::Arc<appproxy::AppProxy>>();
+            let raw = ap.url_for("oauth", "oauth");
+            flowlog::log("oauth", "webview-proxy", &format!("pool={}", if raw.is_some() { "on" } else { "off" }));
+            raw.and_then(|u| oauth::parse_proxy_url(&u).ok())
+                .and_then(|u| u.parse::<tauri::Url>().ok())
         }
-        None => None,
     };
     *pending_oauth_guard() = None;
     if let Some(w) = app.get_webview_window("login") {
@@ -1223,7 +1232,6 @@ async fn kill_zcode(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn set_behavior(
-    app: AppHandle,
     launch_after_switch: Option<bool>,
     close_to_tray: Option<bool>,
     hot_switch: Option<bool>,
@@ -1244,10 +1252,10 @@ async fn set_behavior(
     if let Some(v) = auto_claim {
         s.auto_claim = Some(v);
     }
-    let r = save_settings(&paths, &s);
-    rebuild_tray(&app);
-    let _ = app.emit("state-changed", ());
-    r
+    // 行为开关全都是即时读盘生效的单项配置：不重建托盘（主线程跑全量 get_state
+    // 会阻塞 WebView），也不广播 state-changed（会触发两处全量 refresh 且把乐观
+    // UI 打回旧值）。前端各自乐观翻转，主窗口 auto_claim 由 toggleAutoClaim 自行刷新。
+    save_settings(&paths, &s)
 }
 
 #[tauri::command]
@@ -1523,7 +1531,7 @@ fn set_theme_pref(th: String) -> Result<(), String> {
 #[tauri::command]
 fn proxy_settings_get(app: AppHandle) -> Result<serde_json::Value, String> {
     let _ = app;
-    let ap = app.state::<appproxy::AppProxy>();
+    let ap = app.state::<std::sync::Arc<appproxy::AppProxy>>();
     Ok(ap.status())
 }
 
@@ -1542,7 +1550,7 @@ fn proxy_settings_save(
     scopes: Option<std::collections::HashMap<String, bool>>,
 ) -> Result<serde_json::Value, String> {
     let _ = app;
-    let ap = app.state::<appproxy::AppProxy>();
+    let ap = app.state::<std::sync::Arc<appproxy::AppProxy>>();
     let mut cfg = {
         let c = ap.cfg.lock().map_err(|e| e.to_string())?;
         c.clone()
@@ -1791,7 +1799,7 @@ async fn gateway_start(
         // 代理配置已上移设置页（proxy_settings_save）：gateway_start 不再接受代理字段，
         // 保留参数仅为前端旧签名兼容——收到即转发给 AppProxy（同一配置面，即时生效）
         if proxy_mode.is_some() || proxy_single.is_some() || proxy_proxies.is_some() {
-            let ap = app.state::<appproxy::AppProxy>();
+            let ap = app.state::<std::sync::Arc<appproxy::AppProxy>>();
             let mut pc = ap.cfg.lock().map_err(|e| e.to_string())?.clone();
             if let Some(v) = proxy_mode { if matches!(v.as_str(), "off" | "single" | "pool") { pc.mode = v; } }
             if let Some(v) = proxy_single { pc.single = v.trim().to_string(); }
@@ -1825,7 +1833,7 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
     // 应用级代理配置（设置页保存）：回显 + 出口运行态
     let ap_cfg = {
-        let ap = app.state::<appproxy::AppProxy>();
+        let ap = app.state::<std::sync::Arc<appproxy::AppProxy>>();
         let c = ap.cfg.lock().map_err(|e| e.to_string())?;
         c.clone()
     };

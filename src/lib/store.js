@@ -142,7 +142,7 @@ export async function loadAcctQuota(id) {
 
 // ---- 领取历史（claim-history.json，按 userId 分组） ----
 // 键在后端用 userId（JWT sub）：重登换 accountId 也能命中同一个人的记录。
-// id -> { history: [{planId, planName, claimedAt, effectiveAt, endsAt}] | null, err? }
+// id -> { history: [{planId, planName, claimed_at, effective_at, ends_at}] | null, err? }
 
 async function loadClaimHistory(id) {
   try {

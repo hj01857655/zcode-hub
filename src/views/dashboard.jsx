@@ -146,12 +146,14 @@ export default function DashboardPage({ onNavigate }) {
       </div>
 
       {/* 网关运行区：池健康一行 + 今日请求聚合（new-api 看板同思路的用量块） */}
-      <div className="dash-gw">
-        <div className="dash-gw-head">
-          <span className="dash-gw-title"><Ic name="swap" size={13} /> {t("d.gwSection")}</span>
-          {gwOn
-            ? <span className="dash-gw-port">{t("d.gatewayOn", { port: gw.port ?? 8081 })}</span>
-            : <button className="btn-ghost" onClick={() => onNavigate?.("gateway")}>{t("d.gwGoStart")}</button>}
+      <div className="ui-card dash-gw">
+        <div className="ui-sec-title">
+          <span>{t("d.gwSection")}</span>
+          <span className="ui-sec-extra">
+            {gwOn
+              ? <span className="dash-gw-port">{t("d.gatewayOn", { port: gw.port ?? 8081 })}</span>
+              : <button className="btn-ghost btn-mini" onClick={() => onNavigate?.("gateway")}>{t("d.gwGoStart")}</button>}
+          </span>
         </div>
         {gwOn
           ? <>
@@ -197,11 +199,13 @@ export default function DashboardPage({ onNavigate }) {
           : null}
       </div>
 
-      <div className="dash-sub">
-        <Ic name="list" size={13} /> {t("d.accSection")}
+      <div className="ui-sec">
+        <div className="ui-sec-title">
+          <span>{t("d.accSection")}</span>
+          <span className="ui-sec-extra">{t("d.quotaTotal")}</span>
+        </div>
         {accounts.length
-          ? <span className="dash-sub-total">
-              <span className="dash-sub-total-label">{t("d.quotaTotal")}</span>
+          ? <div className="dash-sub-total dash-total-row">
               {totals.length
                 ? <>
                     {totals.slice(0, 6).map((v) => (
@@ -229,7 +233,7 @@ export default function DashboardPage({ onNavigate }) {
               >
                 <Ic name="refresh" size={13} />
               </button>
-            </span>
+            </div>
           : null}
       </div>
       <div className="dash-list">
@@ -271,7 +275,13 @@ export default function DashboardPage({ onNavigate }) {
             </div>
           );
         })}
-        {accounts.length === 0 ? <div className="dash-empty">{t("m.emptyTitle")}</div> : null}
+        {accounts.length === 0
+          ? <div className="ui-empty">
+              <Ic name="empty" size={28} />
+              <div className="ui-empty-title">{t("m.emptyTitle")}</div>
+              <div className="ui-empty-desc">{t("ui.emptyDash")}</div>
+            </div>
+          : null}
       </div>
     </div>
   );

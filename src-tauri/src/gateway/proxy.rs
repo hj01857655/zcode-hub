@@ -121,6 +121,12 @@ impl ProxyPool {
         })
     }
 
+    /// 按用途取粘性出口的代理 URL（登录窗口 webview 等需要 URL 而非 Agent 的调用方）。
+    /// 与 client_for/agent_for 共用 bind_for：同一粘性 key 拿到同一出口。
+    pub fn url_for(&self, member_id: &str) -> Option<String> {
+        self.bind_for(member_id).map(|e| e.url.clone())
+    }
+
     /// 按账号取粘性出口（reqwest 版，网关转发用）：已有绑定且出口可用 → 返回；
     /// 无绑定/绑定死/冷却中 → 重新分配（绑定数最少优先）。全部死透 → 整池复位二次机会。
     /// None = 池内无可分配出口（调用方回落基础客户端直连）。

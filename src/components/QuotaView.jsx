@@ -134,15 +134,18 @@ function PendingStrip({ pending }) {
 // 领取历史条：本地 claim-history.json 的已领取记录（userId 键，重登不丢）。
 // 只读展示「已领取过 X · 领于 …」；仅无可领条且无待生效态时渲染——有可领条说明
 // 服务端认为还能领，历史让位给可操作状态。
+// 时间字段走后端 ClaimHistoryEntry 的原始下划线名（claimed_at），缺失/无效
+// 时 fmt 兜底为 "—"，避免 Invalid Date 把 getFullYear() 渲染成 NaN。
 function HistoryStrip({ history }) {
   const fmt = (ts) => {
+    if (!ts || !Number.isFinite(ts)) return "—";
     const d = new Date(ts);
     const p2 = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
   };
   const latest = history[history.length - 1];
   if (!latest) return null;
-  const when = fmt(latest.claimedAt);
+  const when = fmt(latest.claimed_at);
   return (
     <div className="claim-strip history" title={t("m.claimHistoryTitle")}>
       <Ic name="check" size={15} />

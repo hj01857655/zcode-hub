@@ -81,7 +81,7 @@ function LogRow({ l, open, onToggle }) {
               {l.finish ? <><span className="x-log-k">{t("x.logFinish")}</span><span className="x-log-v" title={t("x.logFinishTip")}>{l.finish}</span></> : null}
               {l.ua ? <><span className="x-log-k">UA</span><span className="x-log-v" title={l.ua}>{l.ua}</span></> : null}
               {typeof l.cost === "number" ? <><span className="x-log-k">{t("xl.cost")}</span><span className="x-log-v" title={t("xl.costTip")}>{fmtCost(l.cost)}</span></> : null}
-              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
+              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small className="ui-sub-id">{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
             <div className="x-log-blocks">
@@ -283,7 +283,9 @@ export default function GatewayLogsPage() {
         <span className="tb-spacer" />
       </section>
       <section className="settings open">
-        <div className="x-ls-stats">
+        <div className="ui-card">
+          <div className="ui-sec-title"><span>{t("ui.secStats")}</span></div>
+          <div className="x-ls-stats">
           <div className="x-ls-group">
             <span className="x-ls-group-label">{t("xl.groupReq")}</span>
             <div className="x-stat"><span className="x-stat-v">{stats.total}</span><span className="x-stat-k">{t("xl.total")}</span></div>
@@ -317,7 +319,7 @@ export default function GatewayLogsPage() {
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tcache)}<small>⚡</small></span><span className="x-stat-k">{t("x.tokCache")}</span></div>
             {stats.errTop.map(({ code, n }) => (
               <div key={code} className="x-stat err-badge" title={t("xl.errDistTip")}
-                role="button" style={{ cursor: "pointer" }}
+                role="button"
                 onClick={() => setQ(code)}>
                 <span className="x-stat-v fail">{n}</span>
                 <span className="x-stat-k">{code}</span>
@@ -325,8 +327,14 @@ export default function GatewayLogsPage() {
             ))}
           </div>
         </div>
+        </div>
 
-        <div className="x-ls-filters">
+        <div className="ui-sec">
+          <div className="ui-sec-title">
+            <span>{t("ui.secLogList")}</span>
+            <span className="ui-sec-extra">{t("ui.secFilters")}</span>
+          </div>
+          <div className="x-ls-filters">
           <input className="zcode-path x-ls-search" type="text" value={q}
             onChange={(e) => setQ(e.target.value)} placeholder={t("xl.searchPh")} />
           <select className="zcode-path" value={rangeFilter} onChange={(e) => setRangeFilter(e.target.value)}>
@@ -350,6 +358,7 @@ export default function GatewayLogsPage() {
           </div>
         </div>
 
+        <div className="ui-scroll-x">
         {filtered.length
           ? <div className="x-log-list tree">
               <div className="x-log-head">
@@ -400,11 +409,13 @@ export default function GatewayLogsPage() {
                 );
               })}
             </div>
-          : <div className="x-log-empty">
+          : <div className="ui-empty">
               <Ic name="empty" size={18} />
               <span>{t("xl.empty")}</span>
             </div>}
-        <div className="hint">{t("xl.hint")}</div>
+        </div>
+        <div className="ui-note">{t("xl.hint")}</div>
+      </div>
       </section>
     </>
   );

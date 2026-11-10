@@ -131,15 +131,28 @@ export default function ReferralPage() {
           <Ic name="refresh" size={14} cls={anyBusy ? "spin" : ""} /> {t("r.refreshAll")}
         </button>
       </div>
-      <div className="rf-head rf-row">
-        <div>{t("r.colAccount")}</div>
-        <div>{t("r.colTasks")}</div>
-        <div>{t("r.colMyCode")}</div>
-        <div>{t("r.colBind")}</div>
+      <div className="ui-sec">
+        <div className="ui-sec-title"><span>{t("ui.secRefTable")}</span></div>
+        <div className="ui-scroll-x">
+          <div className="ui-table-wrap">
+            <div className="rf-head rf-row">
+              <div>{t("r.colAccount")}</div>
+              <div>{t("r.colTasks")}</div>
+              <div>{t("r.colMyCode")}</div>
+              <div>{t("r.colBind")}</div>
+            </div>
+            {accounts.map((a) => <ReferralRow key={a.id} a={a} />)}
+          </div>
+        </div>
+        {accounts.length === 0
+          ? <div className="ui-empty">
+              <Ic name="empty" size={28} />
+              <div className="ui-empty-title">{t("m.emptyTitle")}</div>
+              <div className="ui-empty-desc">{t("ui.emptyRef")}</div>
+            </div>
+          : null}
+        <div className="ui-note">{t("r.pageHint")}</div>
       </div>
-      {accounts.map((a) => <ReferralRow key={a.id} a={a} />)}
-      {accounts.length === 0 ? <div className="rf-none rf-empty">{t("m.emptyTitle")}</div> : null}
-      <div className="rf-foot">{t("r.pageHint")}</div>
     </div>
   );
 }

@@ -333,136 +333,152 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
         <span className="tb-spacer" />
       </section>
       <section className="settings open gw-page">
-        {err ? <div className="hint" style={{ color: "var(--red)", marginBottom: 10 }}>{err}</div> : null}
-        {/* 协议选择置顶：决定调用示例与接入形态，先选协议再看端点/密钥。
-            不带 x-proto-seg（那是测试弹窗的面板内全宽形态）；fit-content 收住胶囊，
-            块级 div 默认占满行宽会让三颗小按钮拖着一条整行空胶囊 */}
-        <div className="lang-seg" style={{ width: "fit-content", marginBottom: 10 }}>
-          <button className={"lang-opt" + (accProto === "chat" ? " on" : "")} onClick={() => setAccProto("chat")}>Chat</button>
-          <button className={"lang-opt" + (accProto === "responses" ? " on" : "")} onClick={() => setAccProto("responses")}>Responses</button>
-          <button className={"lang-opt" + (accProto === "messages" ? " on" : "")} onClick={() => setAccProto("messages")}>Messages</button>
-        </div>
-        <label>{t("x.endpointLabel")}</label>
-        <div className="path-line">
-          <input className="zcode-path" type="text" value={endpointInput}
-            onChange={(e) => { epTouched.current = true; setEndpointInput(e.target.value); }}
-            placeholder={protocolBase(status?.port ?? 8081, accProto)} />
-          <button className="btn-ghost has-ic" title={t("x.copyEndpoint")} onClick={copyEndpoint}>
-            <Ic name={copiedEp ? "check" : "copy"} size={14} />
-          </button>
-          {portDirty
-            ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
-            : null}
-        </div>
-
-        <label style={{ marginTop: 10 }}>API KEY</label>
-        <div className="path-line">
-          <input className="zcode-path" type={showKey ? "text" : "password"} value={apiKey}
-            onChange={(e) => { keyTouched.current = true; setApiKey(e.target.value); }}
-            placeholder={t("x.apiKeyPh")} />
-          {apiKey
-            ? <button className="btn-ghost has-ic" title={showKey ? t("x.hideKey") : t("x.showKey")}
-                onClick={() => setShowKey(!showKey)}><Ic name={showKey ? "eyeOff" : "eye"} size={14} /></button>
-            : null}
-          {status?.apiKey
-            ? <button className="btn-ghost has-ic" title={copied ? t("x.copied") : t("x.copyKey")} onClick={copyKey}>
-                <Ic name={copied ? "check" : "copy"} size={14} />
+        <div className="ui-card">
+          <div className="ui-sec-title"><span>{t("ui.secAccess")}</span></div>
+          {err ? <div className="ui-note err">{err}</div> : null}
+          {/* 协议选择置顶：决定调用示例与接入形态，先选协议再看端点/密钥。
+              fit-content 收住胶囊，块级 div 默认占满行宽会拖着一条整行空胶囊 */}
+          <div className="lang-seg ui-seg" role="radiogroup" aria-label={t("x.endpointLabel")}>
+            <button className={"lang-opt" + (accProto === "chat" ? " on" : "")} onClick={() => setAccProto("chat")}>Chat</button>
+            <button className={"lang-opt" + (accProto === "responses" ? " on" : "")} onClick={() => setAccProto("responses")}>Responses</button>
+            <button className={"lang-opt" + (accProto === "messages" ? " on" : "")} onClick={() => setAccProto("messages")}>Messages</button>
+          </div>
+          <div className="ui-field">
+            <label className="ui-label" htmlFor="gw-endpoint">{t("x.endpointLabel")}</label>
+            <div className="path-line">
+              <input id="gw-endpoint" className="zcode-path" type="text" value={endpointInput}
+                onChange={(e) => { epTouched.current = true; setEndpointInput(e.target.value); }}
+                placeholder={protocolBase(status?.port ?? 8081, accProto)} />
+              <button className="btn-ghost has-ic" title={t("x.copyEndpoint")} onClick={copyEndpoint}>
+                <Ic name={copiedEp ? "check" : "copy"} size={14} />
               </button>
-            : null}
-          {keyDirty
-            ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
-            : null}
-        </div>
-        {running && (keyDirty || portDirty) ? <div className="hint">{t("x.cfgRunningHint")}</div> : null}
-        {savedRestart
-          ? <div className="x-restart-bar">
-              <span>{t("x.savedRestartHint")}</span>
-              <button className="btn-primary" disabled={busy} onClick={doRestart}>
-                <Ic name="refresh" size={13} /> {t("x.restart")}
-              </button>
+              {portDirty
+                ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
+                : null}
             </div>
-          : null}
-
-        <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>
-        <pre className="x-curl">{accessCurl}</pre>
-        <div className="path-line" style={{ marginTop: 6 }}>
-          <button className="btn-ghost has-ic" title={copiedEx ? t("x.copied") : t("x.copyBtn")} onClick={copyExample}>
-            <Ic name={copiedEx ? "check" : "copy"} size={14} />
-          </button>
+          </div>
+          <div className="ui-field ui-gap">
+            <label className="ui-label" htmlFor="gw-apikey">API KEY</label>
+            <div className="path-line">
+              <input id="gw-apikey" className="zcode-path" type={showKey ? "text" : "password"} value={apiKey}
+                onChange={(e) => { keyTouched.current = true; setApiKey(e.target.value); }}
+                placeholder={t("x.apiKeyPh")} />
+              {apiKey
+                ? <button className="btn-ghost has-ic" title={showKey ? t("x.hideKey") : t("x.showKey")}
+                    onClick={() => setShowKey(!showKey)}><Ic name={showKey ? "eyeOff" : "eye"} size={14} /></button>
+                : null}
+              {status?.apiKey
+                ? <button className="btn-ghost has-ic" title={copied ? t("x.copied") : t("x.copyKey")} onClick={copyKey}>
+                    <Ic name={copied ? "check" : "copy"} size={14} />
+                  </button>
+                : null}
+              {keyDirty
+                ? <button className="btn-primary" disabled={busy} onClick={doSaveBase}>{t("common.save")}</button>
+                : null}
+            </div>
+          </div>
+          {running && (keyDirty || portDirty) ? <div className="ui-note">{t("x.cfgRunningHint")}</div> : null}
+          {savedRestart
+            ? <div className="x-restart-bar">
+                <span>{t("x.savedRestartHint")}</span>
+                <button className="btn-primary" disabled={busy} onClick={doRestart}>
+                  <Ic name="refresh" size={13} /> {t("x.restart")}
+                </button>
+              </div>
+            : null}
         </div>
-        <div className="hint">{t("x.endpointDesc")}</div>
-        {accProto === "messages" ? <div className="hint">{t("x.endpointAnthropicNote")}</div> : null}
+
+        <div className="ui-card">
+          <div className="ui-sec-title"><span>{t("x.exampleLabel")}</span></div>
+          <pre className="x-curl">{accessCurl}</pre>
+          <div className="path-line ui-gap">
+            <button className="btn-ghost has-ic" title={copiedEx ? t("x.copied") : t("x.copyBtn")} onClick={copyExample}>
+              <Ic name={copiedEx ? "check" : "copy"} size={14} />
+            </button>
+          </div>
+          <div className="ui-note">{t("x.endpointDesc")}</div>
+          {accProto === "messages" ? <div className="ui-note">{t("x.endpointAnthropicNote")}</div> : null}
+        </div>
 
         {/* 账号池：一行摘要条，点击跳账号管理页定位；明细在账号页看，不在主页堆 */}
-        <label style={{ marginTop: 14 }}>{t("x.poolLabel")}</label>
-        {status?.pool?.members?.length
-          ? <>
-              {/* hover 明细：第一行对外可用模型并集（/v1/models 同源），随后每号模型面——
-                  页面不渲染常驻模型行，能力视图只进 hover，主页面保持单行摘要 */}
-              <div
-                className="x-pool-line"
-                title={(() => {
-                  const lines = [];
-                  if (status.models?.length) lines.push(`${t("x.modelsAvail")}: ${status.models.join(", ")}`);
-                  lines.push(...poolSorted.map((m) => `${m.name}: ${Array.isArray(m.models) ? (m.models.length ? m.models.join(", ") : t("x.poolNoBuckets")) : t("x.poolUnknown")}`));
-                  return lines.join("\n");
-                })()}
-                onClick={() => onOpenAccount?.()}
-              >
-                <Ic name="list" size={14} />
-                <span>{t("x.poolSummary", {
-                  n: poolSorted.filter((m) => !(m.cooldown_secs > 0)).length,
-                  cool: poolSorted.filter((m) => m.cooldown_secs > 0).length,
-                  inflight: poolSorted.reduce((a, m) => a + (m.inflight || 0), 0),
-                  total: poolSorted.length,
-                })}</span>
-                {status.pool.global_backoff_secs > 0
-                  ? <span className="x-pool-tag warn">{t("x.globalBackoff")} {status.pool.global_backoff_secs}s</span>
-                  : null}
-                <span className="x-pool-caret">▸</span>
-              </div>
-            </>
-          : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.poolEmpty")}</span></div>}
+        <div className="ui-card">
+          <div className="ui-sec-title"><span>{t("ui.secRuntime")}</span></div>
+          <div className="ui-sec first">
+            <div className="ui-sec-title"><span>{t("x.poolLabel")}</span></div>
+            {status?.pool?.members?.length
+              ? <>
+                  {/* hover 明细：第一行对外可用模型并集（/v1/models 同源），随后每号模型面——
+                      页面不渲染常驻模型行，能力视图只进 hover，主页面保持单行摘要 */}
+                  <div
+                    className="x-pool-line"
+                    title={(() => {
+                      const lines = [];
+                      if (status.models?.length) lines.push(`${t("x.modelsAvail")}: ${status.models.join(", ")}`);
+                      lines.push(...poolSorted.map((m) => `${m.name}: ${Array.isArray(m.models) ? (m.models.length ? m.models.join(", ") : t("x.poolNoBuckets")) : t("x.poolUnknown")}`));
+                      return lines.join("\n");
+                    })()}
+                    onClick={() => onOpenAccount?.()}
+                  >
+                    <Ic name="list" size={14} />
+                    <span>{t("x.poolSummary", {
+                      n: poolSorted.filter((m) => !(m.cooldown_secs > 0)).length,
+                      cool: poolSorted.filter((m) => m.cooldown_secs > 0).length,
+                      inflight: poolSorted.reduce((a, m) => a + (m.inflight || 0), 0),
+                      total: poolSorted.length,
+                    })}</span>
+                    {status.pool.global_backoff_secs > 0
+                      ? <span className="x-pool-tag warn">{t("x.globalBackoff")} {status.pool.global_backoff_secs}s</span>
+                      : null}
+                    <span className="x-pool-caret">▸</span>
+                  </div>
+                </>
+              : <div className="ui-empty compact">
+                  <Ic name="empty" size={20} />
+                  <div className="ui-empty-title">{t("x.poolEmpty")}</div>
+                  <div className="ui-empty-desc">{t("ui.emptyPool")}</div>
+                </div>}
+          </div>
 
-        {/* 出网代理池：一行摘要（hover 明细 = 每出口脱敏串/健康分/绑定/冷却） */}
-        {status?.proxyMode && status.proxyMode !== "off"
-          ? proxyStats.length
-            ? <div className="x-pool-line" style={{ marginTop: 8, cursor: "default" }}
-                title={proxyStats.map((p) => `${p.url} · ${t("x.proxyScore")} ${p.score} · ${t("x.proxyBind")} ${p.bindings}${p.cooling ? ` · ${t("x.proxyCooling")}` : ""}`).join("\n")}>
-                <Ic name="swap" size={14} />
-                <span>{t("x.proxyLabel")} · {t("x.proxySummary", { alive: proxyStats.length - proxyCool, cool: proxyCool, total: proxyStats.length })}</span>
-                {proxyCool ? <span className="x-pool-tag warn">{t("x.proxyCooling")} {proxyCool}</span> : null}
-              </div>
-            : <div className="x-pool-line" style={{ marginTop: 8, cursor: "default" }}>
-                <Ic name="alert" size={14} />
-                <span className="x-pool-tag warn">{t("x.proxyInvalid")}</span>
-              </div>
-          : null}
-
-        {/* 上游供应商：单通道压成一行——host + 模型数（hover 展开清单）；动作只留
-            刷新模型面与单号直连测试两个小按钮，来源/时刻一并进行内 tag */}
-        <div className="x-pool-line" style={{ marginTop: 14, cursor: "default" }}
-          title={shownModels?.models?.length
-            ? `${t("x.modelsAvail")}:\n${shownModels.models.join("\n")}`
-            : t("x.modelsNone")}>
-          <Ic name="sliders" size={14} />
-          <span>ZCode · zcode.z.ai · {t("x.modelsAvail")} {shownModels?.models?.length ?? 0}</span>
-          {provBusy ? <span className="x-pool-tag">{t("x.provTesting")}</span> : null}
-          {shownModels?.src
-            ? <span className="x-pool-tag">
-                {t(shownModels.src === "cached" ? "x.modelsFromCache" : "x.modelsFromUpstream")}
-                {shownModels.at ? ` · ${shownModels.at.toLocaleTimeString()}` : ""}
-              </span>
+          {/* 出网代理池：一行摘要（hover 明细 = 每出口脱敏串/健康分/绑定/冷却） */}
+          {status?.proxyMode && status.proxyMode !== "off"
+            ? proxyStats.length
+              ? <div className="x-pool-line ui-static ui-gap"
+                  title={proxyStats.map((p) => `${p.url} · ${t("x.proxyScore")} ${p.score} · ${t("x.proxyBind")} ${p.bindings}${p.cooling ? ` · ${t("x.proxyCooling")}` : ""}`).join("\n")}>
+                  <Ic name="swap" size={14} />
+                  <span>{t("x.proxyLabel")} · {t("x.proxySummary", { alive: proxyStats.length - proxyCool, cool: proxyCool, total: proxyStats.length })}</span>
+                  {proxyCool ? <span className="x-pool-tag warn">{t("x.proxyCooling")} {proxyCool}</span> : null}
+                </div>
+              : <div className="x-pool-line ui-static ui-gap">
+                  <Ic name="alert" size={14} />
+                  <span className="x-pool-tag warn">{t("x.proxyInvalid")}</span>
+                </div>
             : null}
-          <span className="tb-spacer" />
-          <button className="btn-ghost has-ic" disabled={provBusy} onClick={doFetchModels}
-            title={t("x.fetchModelsBtn")}>
-            <Ic name="refresh" size={13} />
-          </button>
-          <button className="btn-ghost has-ic" disabled={provBusy || !shownModels?.models?.length}
-            onClick={() => doProvTest(null)} title={t("x.provTestFirst")}>
-            <Ic name="bolt" size={13} />
-          </button>
+
+          {/* 上游供应商：单通道压成一行——host + 模型数（hover 展开清单）；动作只留
+              刷新模型面与单号直连测试两个小按钮，来源/时刻一并进行内 tag */}
+          <div className="x-pool-line ui-static ui-gap"
+            title={shownModels?.models?.length
+              ? `${t("x.modelsAvail")}:\n${shownModels.models.join("\n")}`
+              : t("x.modelsNone")}>
+            <Ic name="sliders" size={14} />
+            <span>ZCode · zcode.z.ai · {t("x.modelsAvail")} {shownModels?.models?.length ?? 0}</span>
+            {provBusy ? <span className="x-pool-tag">{t("x.provTesting")}</span> : null}
+            {shownModels?.src
+              ? <span className="x-pool-tag">
+                  {t(shownModels.src === "cached" ? "x.modelsFromCache" : "x.modelsFromUpstream")}
+                  {shownModels.at ? ` · ${shownModels.at.toLocaleTimeString()}` : ""}
+                </span>
+              : null}
+            <span className="tb-spacer" />
+            <button className="btn-ghost has-ic" disabled={provBusy} onClick={doFetchModels}
+              title={t("x.fetchModelsBtn")}>
+              <Ic name="refresh" size={13} />
+            </button>
+            <button className="btn-ghost has-ic" disabled={provBusy || !shownModels?.models?.length}
+              onClick={() => doProvTest(null)} title={t("x.provTestFirst")}>
+              <Ic name="bolt" size={13} />
+            </button>
+          </div>
         </div>
       </section>
 

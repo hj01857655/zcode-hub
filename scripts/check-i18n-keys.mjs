@@ -22,7 +22,7 @@ for (const k of en) if (!zh.has(k)) errs.push(`zh 缺 key: ${k}`);
 const DYNAMIC = [
   "q.win.daily", "q.win.weekly", "q.win.monthly", "q.win.cycle",
   "prov.bigmodel", "prov.zai",
-  "m.bitProbeNoPlan", "m.bitProbeAuthFailed",
+  "m.bitVerifyNoPlan", "m.bitVerifyAuthFailed",
   "r.task.login_device", "r.task.referral_bind_code",
   "r.task.referral_new_user_reward", "r.task.send_message",
 ];
