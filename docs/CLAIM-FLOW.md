@@ -229,3 +229,104 @@ URL 仅带 seq；版本/平台只在头里
    401（无凭据）/ 1001–1005（业务态，1005=计划期内重复领取）/ 3001、3007 / -1（网络/解析）
    服务器 msg 优先展示
 ```
+
+## 8. 失败分支逆向：领取失败不撤销资格（2026-11-11 asar 实凿）
+
+UI 层 dialogAction（`app.asar` @ ~370389500–370393500，3.18.0.10300）失败路径逐行：
+
+```js
+if (s.status !== `success`)
+  return (i.type===`claim_zcode_plan`||i.type===`open_url`)
+         && (s.terminal||s.status===`uncertain`) && (a=!0, m()),   // 终局/不确定 → 本地关弹窗
+         t.setState({error:s.message??null, errorAction:i.type}), s;
+// finally: a=true 时 banner 置 null；o(=成功标记) 为 false → 不调 e.refresh()
+```
+
+服务层 claimManualPlan（`app.asar` @ ~319768306）失败返回：
+
+```js
+if (s!==0 || !r.data?.plan) {
+  let d = r.data?.plan?.ends_at;
+  return {success:!1, code:s, message:r.data?.message??"",
+          ...Number.isFinite(d) ? {failureEndsAt:d} : {}}   // 唯一附带字段
+}
+```
+
+**结论：客户端失败分支零权益操作**——不调 balance、不调 entitlement、不发 touch/action
+（confirm 只在成功、cancel 只在手动关闭时发）。所谓"撤销"只有两条假象：
+
+1. **弹窗被消费**：terminal/uncertain 失败时本地把 banner/dialog 置 null 且不 report——
+   投放入口在 UI 消失，但服务端投放记录未收到任何消耗信号，下次 touch.query 可能重投；
+2. **failureEndsAt 冷却展示**：`data.plan.ends_at` 仅用于 1005（计划期内重复领取）时
+   的"有效期至 X"倒计时——不是撤销，是"当前 plan 期内不能再领"的服务端事实回显。
+
+资格真实约束 = 服务端 plan 记录（1005 证明"每计划期一次"由服务端记账，与客户端成败展示无关）。
+成功路径才动权益：confirm report → 投放清空 → balance 新 plan → entitlement 快照重建。
+
+## 9. 投放侧闸门：批量"不可领取"的真因（2026-11-12 实测）
+
+14 号农场当天全部有资格（15 条 touch 全 `deliveries=1 plans=zcode-v3-start-plan-1112`），
+依次领取 5 个（billing/claim 全 code=0）后，第 6 个起 9 条 touch 全 `deliveries=0`，
+且后续 19:07/19:09/19:17 三批复查仍全空。全天无一笔失败 claim——
+后 9 号根本没收到投放，`billing/claim` 一次都没发出。客户端"不可领取"是空投放的展示层回声。
+
+单变量实验排除两个维度（touch 为 GET 轮询，无副作用）：
+
+| 变量 | 实验 | 结果 |
+|------|------|------|
+| 设备 mid | 未领号 own-mid / fake-mid（同格式 uuid） | 均 deliveries=0，无差别 |
+| 缺 mid | 未领号不发 X-Device-Mid | HTTP 400 code=3001（mid 必填，反证服务端在读它） |
+| 出口 IP | 未领号走 10 个独立住宅代理出口 | 代理厂商隧道层全 429（池当日配额耗尽），未能实测 |
+
+已实锤的因果：**投放配额按（环境 × 时间窗）计——每窗 5 份先到先得，窗口 ≈2h07m 滚动重开、
+按天重置。11/12 已实证定案**：
+
+- 每天首波前 14 号全有资格（11/12 探测全 deliveries=1）——配额随日期重置；
+- 领满 5 收闸：未领号的"资格"被投放层挡住（touch deliveries=0），非 claim 层拒绝；
+- **窗口滚动实证（21:07:20–21:07:45，hub 自动领 5 笔全 code=0）**：1292548381/hjj09903/
+  ShannonYoung8131/AaronWallace42/NazSuno19142——恰为第一波未领的 5 号，间隔距首波
+  **127.1 min**（预测 126.5，差 0.6 min）；第二波投放流向未领池（按「该计划未领」过滤）；
+- 11/10 两小批（19:45 两笔 / 19:57 三笔，间隔 11.5 min）兼容"每窗 5"：首窗仅耗 2，
+  余 3 名额继续可发，不必等窗口滚动；
+- 19:00 领满后 +84.4 min（20:25）复查仍空：闭窗期。22:14/22:15 复查 9 号 deliveries 全 0：
+  其中 5 号 21:07 已领走（deliveries 随领取清空），另 4 号（yrs1rgxk/so2j0pwh/
+  RobertoSantos6003/BrettCarter1531）本波未获投放——投放队列只发了 5 份，未见者等下一窗。
+  22:14 John 目击的"10 个"= hub UI 今日已领账号数（5+5）。
+
+**收割策略**：按波次走——每 ~2h07m 一波 5 个，一天 3~4 波可覆盖 14 号；
+必须赶在窗口开着时领（投放存续期短，22:14→22:15 一分钟内 10 个可见位全部消失）。
+与 §8 闭环：资格撤销不存在，闸门在投放侧；1005 才是账号级重复领取的回声。
+
+待验证（优先级降后）：① 投放存续期精确时长（下轮窗口开时 30s 级密集轮询 touch）；② 换出口
+IP 是否立即恢复投放（代理池 429 未测成）——若兑现则窗口模型可叠加 IP 维度多开并行。
+绕行思路已预留：claim.rs scoped_agent per-account scope 接线。
+
+## 10. claim 端点直证：投放空=无法领取，码闸在前（2026-11-12 补）
+
+对无投放账号直接 POST billing/claim（plan-1112），闸门顺序与资格判定全部实锤：
+
+**闸门顺序**：
+- 裸打（无 captcha 头）→ HTTP 400 `code=3007 captcha verify failed`——验证码闸在最前；
+- 降级票（探针页缺 `prefix` → SDK 请求全打 `undefined.captcha-open.aliyuncs.com`，
+  INIT_FAIL，产 76B `isSign` 短票）→ 仍 3007：服务端查不到 certifyId 完成记录；
+- 补 `prefix=no8xfe + region=cn`（client/configs 的 captcha 段）→ 280B `securityToken`
+  真票，无痕首轮即成，3007 消失。
+
+**真票三对照**（同票、同头族、同出口 IP，仅账号状态不同）：
+
+| 账号状态 | 响应 |
+|---|---|
+| 旅行者3007（今日已领 plan-1112） | HTTP 200 `code=1003 target already exists`（业务层） |
+| AaronWallace42（昨日领 1111 已到期，今日无投放） | HTTP 405 `code=3012 账号或者网络环境存在异常` |
+| RobertoSantos6003（从未领过，今日无投放） | HTTP 405 `code=3012` 同上 |
+
+**结论**：
+1. **投放空 = 无法领取**，在 claim 端点 HTTP 层实锤——服务端以 3012 风控话术回绝，
+   实际是投放资格闸，不区分"从未领过"与"领过但已到期"；
+2. 3012 在 claim 语境**不是账号级标记**：同 IP 同时段，已领号正常过闸到业务层（1003），
+   说明闸判的是账号当前投放/套餐状态而非请求形状或出口 IP；
+3. 闸序：**3007 验证码闸 → 3012 投放资格闸 → 业务层（1003 已领 / 1005 期内重复 / 0 成功）**；
+4. 与 §8/§9 闭环：资格既不会被失败撤销（客户端零操作），也不能绕过空投放直接领
+   （服务端闸死）——投放配额（≈5/环境/日）是唯一获取路径。
+
+工具：`tools/captcha_probe.html`（无痕产真票；必须带 prefix/region，否则产降级票必 3007）。
