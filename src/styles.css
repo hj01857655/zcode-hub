@@ -3037,6 +3037,25 @@ html[data-theme="light"] {
 .ui-scroll-x .x-log-head,
 .ui-scroll-x .x-log-row { min-width: 620px; }
 
+/* 关于页版本回退：行内选择 + 按钮，窄屏可折行不挤压 */
+.about-rb-body { margin-top: 10px; }
+.about-rb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.about-rb-row .btn-ghost,
+.about-rb-row .btn-mini { flex: none; }
+.about-rb-row .ui-label { margin: 0; font-size: 13px; color: var(--ink-dim); }
+.about-rb-sel {
+  flex: 0 1 240px;
+  min-width: 150px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+.about-rb-body .ui-empty.compact { flex-wrap: wrap; }
+
 /* 窄视口：过滤行换行、分区收边距、标题行与汇总行允许折行 */
 @media (max-width: 900px) {
   .about-wrap { padding: 20px 18px; }

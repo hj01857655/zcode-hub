@@ -44,6 +44,49 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 
 `latest.json` 登记 Windows NSIS、macOS（`.app.tar.gz`）、Linux AppImage 与 Linux deb 四类自更新通道，各含 x64／ARM64／Apple Silicon 等平台变体；仅 Windows 便携版不在其中，便携版用户仍需从 Releases 手动取新版。
 
+## 版本回退
+
+### 应用内回退
+
+「关于」页 →「版本回退」→「选择版本」→ 选定历史版本 →「回退到此版本」→「确认回退」。客户端把更新端点固定到该 tag 的不可变地址 `https://github.com/hj01857655/zcode-hub/releases/download/v<版本>/latest.json`，只接受公告版本恰好等于所选版本且低于当前版本的发布，并校验下载 URL 的 host 与 tag 路径前缀；产物仍由 minisign 公钥验签。下载完成后安装器接管，Windows 下会自行退出并重启应用，其余平台由 `relaunch()` 兜底。
+
+历史版本列表来自 GitHub `releases.atom`，离线或 feed 不可用时回退到客户端内置的最近版本清单。只列出严格低于当前版本的稳定三段版本号。
+
+**回退只替换程序文件，不回退数据**：账号、配置、领取记录、代理池状态等数据文件保持原样。旧版读取新版写入的 `settings.json` 会忽略未知字段并走默认值，新增配置项可能表现为重置。操作前先备份配置目录；具体路径见应用内「设置」页的数据目录说明。
+
+此能力随新版本发布后才可用：已经装了旧版（例如 v1.10.406）的客户端拿不到回退入口，需要先升级到带该功能的版本。
+
+### 发布通道回滚（服务端，无需改客户端）
+
+把 GitHub「Latest」指回旧 tag，让 `/releases/latest/download/latest.json` 指向该版本的资产：
+
+```bash
+gh release edit v1.10.405 --latest
+```
+
+默认比较器只装更高版本，所以这条只影响版本低于 `v1.10.405` 的客户端（它们会升到 405），已装 `v1.10.406` 的客户端检查更新会判定无更新，保持 406。要恢复原状：
+
+```bash
+gh release edit v1.10.406 --latest
+```
+
+新版本客户端若需要「跟随 Latest 通道降级」，检查更新时可传 `check({ allowDowngrades: true })`；该参数由 `tauri-plugin-updater` 的 `check` 命令接受（JS 类型声明未列出，但 `check(options)` 会原样透传），命中时比较器变为 `update.version != current`。
+
+### 手动覆盖安装
+
+从 [Releases](https://github.com/hj01857655/zcode-hub/releases) 下载目标 tag 的官方签名安装包覆盖安装即可，今天就能用：
+
+- Windows：`zcode-hub_<版本>_x64-setup.exe`（或 `_arm64-setup.exe`）
+- macOS：对应架构的 `.dmg`
+- Linux：`.deb` 或 `.AppImage`
+- Windows 便携版：直接替换 `*_portable.exe`，便携版不走自更新
+
+回退前同样先备份配置目录。
+
+### 安全边界
+
+端点 JSON 走 TLS 但本身不签名，minisign 签名只覆盖下载产物。允许降级后，能伪造端点响应的一方可以把「膨胀的 `version` 字段」和「旧版有效签名 + 旧版产物」配对，把客户端压到带已知漏洞的旧构建。应用内回退用三道约束收窄这个面：端点固定到不可变 tag URL、比较器要求公告版本精确等于所选版本、下载 URL 的 host 与 tag 路径前缀必须匹配。`require_signed_version`（要求签名 trusted comment 携带版本号）在当前 `tauri-plugin-updater 2.10.0` 未实现，且历史 `.sig` 的 trusted comment 只有 `timestamp` 与 `file`，启用会拒掉全部现有历史 Release；要启用需先为可回退的历史产物重新签名。
+
 ## 功能
 
 - **保存 / 切换账号**：一键切换登录身份；切换前自动保全当前登录，绝不丢号；设备身份跟账号走，远程控制中继密钥跨切换保活

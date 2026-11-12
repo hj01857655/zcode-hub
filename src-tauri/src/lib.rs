@@ -13,6 +13,7 @@ mod oauth;
 mod deploy;
 mod quota;
 mod referral;
+mod rollback;
 mod store;
 pub mod gateway;
 mod zcrypto;
@@ -27,6 +28,7 @@ use tauri_plugin_autostart::AutoLaunchManager;
 use tauri_plugin_dialog::DialogExt;
 
 use glass::glass_sync;
+use rollback::{rollback_to, rollback_versions};
 
 const TRAY_ID: &str = "main";
 
@@ -1635,6 +1637,8 @@ pub fn run() {
             gateway_log_history,
             syslog_tail,
             claim_history,
+            rollback_versions,
+            rollback_to,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
