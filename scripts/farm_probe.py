@@ -18,7 +18,8 @@ from hashlib import sha256
 from pathlib import Path
 
 HOME = Path.home()
-SWITCH_DIR = HOME / ".zcode-switch"
+# 数据目录已迁移 .zcode-switch → .zcode-hub（store.rs 6f99161 同步）；旧名回落兼容
+SWITCH_DIR = HOME / ".zcode-hub" if (HOME / ".zcode-hub" / "accounts").is_dir() else HOME / ".zcode-switch"
 UPSTREAM = "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages"
 CLIENT_APP_VERSION_FALLBACK = "3.17.1"
 ctx = ssl.create_default_context()
@@ -195,7 +196,9 @@ def main():
         ask = args[args.index("--ask") + 1]
 
     ver = zcode_app_version()
-    print(f"app_version(注册表探测) = {ver}")
+    if "--ver" in args:
+        ver = args[args.index("--ver") + 1]  # 归因实验覆盖（对齐 ZCODE_GATEWAY_APP_VERSION 口径）
+    print(f"app_version = {ver}")
     prefix = json.loads(
         (Path(__file__).resolve().parent.parent / "src-tauri/src/gateway/assets/prefix.json")
         .read_text(encoding="utf-8")
