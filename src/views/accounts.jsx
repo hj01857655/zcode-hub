@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Ic } from "../components/iconsx.jsx";
 import { t, stripErr } from "../lib/i18n.js";
 import {
-  store, subscribe, getVersion, actions, runtimeFlags,
+  store, subscribe, getVersion, actions, runtimeFlags, emit,
   notchColor, autoPillTitle,
 } from "../lib/store.js";
 import { expireInfo, tierBadges, quotaTotals, fmtTokens } from "../lib/quotaView.js";
@@ -225,5 +225,168 @@ function EmptyState() {
       <div className="ui-empty-title">{t("m.emptyTitle")}</div>
       <div className="ui-empty-desc">{t("ui.emptyAccounts")}</div>
     </div>
+  );
+}
+
+// 账号页本体：工具条 + 标题/搜索 + 筛选 chips + 总额条 + 列表（含拖拽排序、跳转定位闪灯）
+// focusAcc 由 App 层传入（网关页/仪表盘的 onOpenAccount）：本页切走即卸载，定位目标不能存在页内 state。
+export default function AccountsPage({ focusAcc, onFocusDone }) {
+  const s = useStore();
+  const listRef = useRef(null);
+  const [accQuery, setAccQuery] = useState("");
+  const searchRef = useRef(null);
+  // 状态筛选 chips：all / claimable / pending / relogin（与文本搜索叠加）
+  const [accFilter, setAccFilter] = useState("all");
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
+
+  // 定位闪灯（由网关页/仪表盘的 onOpenAccount 触发）：清过滤 → 滚动 → 闪一次边框
+  useEffect(() => {
+    if (!focusAcc) return;
+    // 跳转目标必须可见：搜索词/筛选可能把目标行过滤掉导致 scrollIntoView 静默失效
+    if (accQuery) setAccQuery("");
+    if (accFilter !== "all") setAccFilter("all");
+    const el = listRef.current?.querySelector(`[data-acc="${focusAcc}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("acc-flash");
+    const timer = setTimeout(() => { el.classList.remove("acc-flash"); onFocusDone(); }, 1700);
+    return () => clearTimeout(timer);
+  }, [focusAcc]);
+
+  const st = s.state;
+  const active = st.accounts.find((a) => a.is_active) || null;
+  const claimableCount = st.accounts.filter((a) => (s.claimable[a.id]?.plans || []).length > 0).length;
+  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
+  const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning;
+
+  const accQ = accQuery.trim().toLowerCase();
+  // 状态筛选谓词（与文本搜索叠加）：可领 / 待生效 / 需重登（含 JWT 过期）
+  const ACC_FILTERS = {
+    all: null,
+    claimable: (a) => (s.claimable[a.id]?.plans || []).length > 0,
+    pending: (a) => !!s.claimable[a.id]?.pending,
+    relogin: (a) => a.has_user_info === false || a.jwt_expired,
+  };
+  const shownAccs = st.accounts.filter((a) => {
+    if (accQ && !(a.name.toLowerCase().includes(accQ) || a.id.toLowerCase().includes(accQ))) return false;
+    const pred = ACC_FILTERS[accFilter] || ACC_FILTERS.all;
+    return pred ? pred(a) : true;
+  });
+  // 各档计数（全量口径，不随当前筛选变——计数是导航辅助，不是结果统计）
+  const filterCounts = {
+    all: st.accounts.length,
+    claimable: claimableCount,
+    pending: st.accounts.filter((a) => !!s.claimable[a.id]?.pending).length,
+    relogin: st.accounts.filter((a) => a.has_user_info === false || a.jwt_expired).length,
+  };
+  const accTotals = quotaTotals(st.accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
+
+  // 拖拽落位（#15）：按全量列表算新序，持久化成功后才改本地，失败回滚为后端序
+  const dropTo = (targetId) => {
+    const from = st.accounts.findIndex((x) => x.id === dragId);
+    const to = st.accounts.findIndex((x) => x.id === targetId);
+    const movedId = dragId;
+    setDragId(null); setOverId(null);
+    if (!movedId || from < 0 || to < 0 || from === to) return;
+    const list = [...st.accounts];
+    const [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    invoke("set_account_order", { ids: list.map((x) => x.id) })
+      .then(() => { store.state.accounts = list; emit(); })
+      .catch((e) => toast(stripErr(e), "err"));
+  };
+
+  return (
+    <>
+      <Toolbar s={st} claimableCount={claimableCount} unsaved={st.live_logged_in && !active} />
+      <div className="section-head">
+        <h2>{t("m.accounts")}</h2>
+        <span className="count">{(accQ || accFilter !== "all") ? `${shownAccs.length}/${st.accounts.length}` : t("m.count", { count: st.accounts.length })}</span>
+        {st.accounts.length ? (
+          <input
+            ref={searchRef}
+            className="acc-search"
+            type="search"
+            value={accQuery}
+            placeholder={t("m.searchPh")}
+            onChange={(e) => setAccQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Escape 清空并还焦点：搜索是临时态，键盘一条路走完
+              if (e.key === "Escape" && accQuery) {
+                e.stopPropagation();
+                setAccQuery("");
+                searchRef.current?.focus();
+              }
+            }}
+          />
+        ) : null}
+      </div>
+      {/* 状态筛选 chips：与文本搜索叠加；各档计数为全量口径（导航辅助） */}
+      {st.accounts.length ? (
+        <div className="acc-filters">
+          {[["all", t("f.all")], ["claimable", t("f.claimable")], ["pending", t("f.pending")], ["relogin", t("f.relogin")]].map(([key, label]) => (
+            <button
+              key={key}
+              className={"acc-chip" + (accFilter === key ? " on" : "")}
+              onClick={() => setAccFilter(accFilter === key ? "all" : key)}
+            >
+              {label}{filterCounts[key] ? ` ${filterCounts[key]}` : ""}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {st.accounts.length ? (
+        <div className="dash-sub">
+          {t("d.quotaTotal")}
+          {accTotals.length
+            ? accTotals.map((v) => (
+                <span key={v.label} className="dash-q">
+                  {v.label} <b>{t("q.remainShort")} {fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
+                </span>
+              ))
+            : <span className="dash-q dash-q-pending">…</span>}
+        </div>
+      ) : null}
+      <main className="list" ref={listRef}>
+        {st.accounts.length === 0 ? <EmptyState /> : shownAccs.length === 0 ? <div className="dash-empty">{t("m.searchNoMatch")}</div> : shownAccs.map((a) => (
+          <div key={a.id} data-acc={a.id}
+            className={"acc-item"
+              + (dragId === a.id ? " acc-dragging" : "")
+              + (dragId && dragId !== a.id && overId === a.id ? " acc-over" : "")}
+            draggable={dragId === a.id}
+            onMouseUp={() => { if (dragId === a.id) setDragId(null); }}
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+              try { e.dataTransfer.setData("text/plain", a.id); } catch { /* noop */ }
+            }}
+            onDragOver={(e) => { if (dragId && !accQ) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOverId(a.id); } }}
+            onDrop={(e) => { if (dragId && !accQ) { e.preventDefault(); dropTo(a.id); } }}
+            onDragEnd={() => { setDragId(null); setOverId(null); }}
+          >
+            {!accQ && st.accounts.length > 1 ? (
+              <span className="acc-grip" title={t("m.dragHint")}
+                onMouseDown={() => setDragId(a.id)}>
+                <svg width="10" height="14" viewBox="0 0 10 14" aria-hidden="true">
+                  {[3, 7, 11].map((cy) => (
+                    <g key={cy}>
+                      <circle cx="3" cy={cy} r="1.2" /><circle cx="7" cy={cy} r="1.2" />
+                    </g>
+                  ))}
+                </svg>
+              </span>
+            ) : null}
+            <div className="acc-body">
+              <AccountRow
+                a={a}
+                quota={s.acctQuota[a.id]}
+                plan={s.claimable[a.id]?.plans?.[0] || null}
+                claimDisabled={claimDisabled}
+              />
+            </div>
+          </div>
+        ))}
+      </main>
+    </>
   );
 }
