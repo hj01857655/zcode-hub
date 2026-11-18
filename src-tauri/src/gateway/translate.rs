@@ -63,7 +63,9 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
         return Err("messages array required".into());
     }
 
-    // system：入站可为 string 或 text 块数组；抽出用户段，前缀统一注入
+    // system：入站可为 string 或 text 块数组；官方前缀块（与快照逐字一致）去重跳过，
+    // 只把用户侧块（如 Output Style 段）追加到快照之后
+    let prefix = prefix_segs();
     let mut sys_extra: Vec<String> = vec![];
     match req.get("system") {
         Some(Value::String(s)) if !s.is_empty() => sys_extra.push(s.clone()),
@@ -71,7 +73,7 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
             for b in arr {
                 if b.get("type").and_then(|t| t.as_str()) == Some("text") {
                     if let Some(t) = b.get("text").and_then(|x| x.as_str()) {
-                        if !t.is_empty() {
+                        if !t.is_empty() && !prefix.iter().any(|p| p == t) {
                             sys_extra.push(t.to_string());
                         }
                     }
@@ -83,7 +85,7 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
 
     // 官方 body 逐个 system 块都带 cache_control ephemeral（plan-08 §4），形状照发
     // 注入段不带 cache_control（见 runtime_system_extra 文档：断点上限约束）
-    let mut system: Vec<Value> = prefix_segs()
+    let mut system: Vec<Value> = prefix
         .into_iter()
         .map(|t| json!({ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }))
         .collect();
