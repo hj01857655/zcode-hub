@@ -213,13 +213,13 @@ pub fn openai_to_upstream(req: &Value) -> Result<Value, String> {
         .into_iter()
         .map(|t| json!({ "type": "text", "text": t }))
         .collect();
-    // 运行时注入段（官方前缀后、调用方 system 段前）：无 cache_control，
-    // 与本通道"前缀/追加段均不带"的形状一致（Go translate.go 对齐）
-    for seg in runtime_system_extra() {
-        system.push(json!({ "type": "text", "text": seg }));
-    }
     if !sys_extra.is_empty() {
         system.push(json!({ "type": "text", "text": sys_extra.join("\n\n") }));
+    }
+    // 运行时注入段在调用方 system 段之后（末尾 = 最新指令位，覆盖语义更强）；
+    // 无 cache_control，与本通道"前缀/追加段均不带"的形状一致（Go translate.go 对齐）
+    for seg in runtime_system_extra() {
+        system.push(json!({ "type": "text", "text": seg }));
     }
 
     let max_tokens = match req.get("max_tokens").and_then(|v| v.as_u64()) {
@@ -640,10 +640,12 @@ mod tests {
         let out = openai_to_upstream(&req).unwrap();
         assert_eq!(out["model"], "GLM-5.3-Flash");
         assert_eq!(out["stream"], true);
-        // openai.rs 前缀块不带 cache_control；system 追加段在最后
+        // openai.rs 前缀块不带 cache_control；system 追加段在注入段之前（注入段末尾）
         let sys = out["system"].as_array().unwrap();
-        assert_eq!(sys.last().unwrap()["text"], "be brief");
-        assert!(sys.last().unwrap().get("cache_control").is_none());
+        let brief_idx = sys.iter().position(|b| b["text"] == "be brief").expect("追加段缺失");
+        assert!(sys[brief_idx].get("cache_control").is_none());
+        // 测试环境若存在注入文件（store_dir 真实路径），注入段排在追加段之后且不带 cache_control
+        assert!(sys.iter().skip(brief_idx + 1).all(|b| b.get("cache_control").is_none()));
         let msgs = out["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[1]["role"], "assistant");

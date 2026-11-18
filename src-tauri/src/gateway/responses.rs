@@ -124,13 +124,13 @@ pub fn responses_to_upstream(req: &Value) -> Result<Value, String> {
         .into_iter()
         .map(|t| json!({ "type": "text", "text": t }))
         .collect();
-    // 运行时注入段（官方前缀后、instructions 用户段前）：无 cache_control，
-    // 与本通道形状一致（Go responses.go 对齐）
-    for seg in runtime_system_extra() {
-        system.push(json!({ "type": "text", "text": seg }));
-    }
     if !sys_extra.is_empty() {
         system.push(json!({ "type": "text", "text": sys_extra.join("\n\n") }));
+    }
+    // 运行时注入段在 instructions 用户段之后（末尾 = 最新指令位）；
+    // 无 cache_control，与本通道形状一致（Go responses.go 对齐）
+    for seg in runtime_system_extra() {
+        system.push(json!({ "type": "text", "text": seg }));
     }
 
     let max_tokens = match req.get("max_output_tokens").and_then(|v| v.as_u64()) {

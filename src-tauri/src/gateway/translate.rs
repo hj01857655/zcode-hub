@@ -63,17 +63,30 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
         return Err("messages array required".into());
     }
 
-    // system：入站可为 string 或 text 块数组；抽出用户段，前缀统一注入
-    let mut sys_extra: Vec<String> = vec![];
+    // system：入站可为 string 或 text 块数组。
+    // 客户端官方形态（首段以官方身份句开头）→ 整组透传：版本永远匹配、cache_control
+    // 原样保留，快照重建会造成官方身份双份（11-18 实测：快照 2 段 + 客户端 3 段重复）。
+    // 其余（外部调用方/字符串形态）→ 快照兜底 + 追加段（go 版伪装语义不变）。
+    // 注入段一律追加在末尾，无 cache_control（断点上限 4：客户端 3 段已占满）。
+    let mut inbound_blocks: Vec<Value> = vec![];
+    let mut official_inbound = false;
     match req.get("system") {
-        Some(Value::String(s)) if !s.is_empty() => sys_extra.push(s.clone()),
+        Some(Value::String(s)) if !s.is_empty() => {
+            inbound_blocks.push(json!({ "type": "text", "text": s, "cache_control": { "type": "ephemeral" } }));
+        }
         Some(Value::Array(arr)) => {
+            let mut first = true;
             for b in arr {
                 if b.get("type").and_then(|t| t.as_str()) == Some("text") {
                     if let Some(t) = b.get("text").and_then(|x| x.as_str()) {
-                        if !t.is_empty() {
-                            sys_extra.push(t.to_string());
+                        if t.is_empty() {
+                            continue;
                         }
+                        if first && t.starts_with("You are ZCode") {
+                            official_inbound = true;
+                        }
+                        first = false;
+                        inbound_blocks.push(b.clone());
                     }
                 }
             }
@@ -81,17 +94,21 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
         _ => {}
     }
 
-    // 官方 body 逐个 system 块都带 cache_control ephemeral（plan-08 §4），形状照发
-    // 注入段不带 cache_control（见 runtime_system_extra 文档：断点上限约束）
-    let mut system: Vec<Value> = prefix_segs()
-        .into_iter()
-        .map(|t| json!({ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }))
-        .collect();
+    let mut system: Vec<Value> = if official_inbound {
+        inbound_blocks
+    } else {
+        // 官方 body 逐个 system 块都带 cache_control ephemeral（plan-08 §4），形状照发
+        let mut v: Vec<Value> = prefix_segs()
+            .into_iter()
+            .map(|t| json!({ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }))
+            .collect();
+        for b in &inbound_blocks {
+            v.push(b.clone());
+        }
+        v
+    };
     for seg in runtime_system_extra() {
         system.push(json!({ "type": "text", "text": seg }));
-    }
-    if !sys_extra.is_empty() {
-        system.push(json!({ "type": "text", "text": sys_extra.join("\n\n"), "cache_control": { "type": "ephemeral" } }));
     }
 
     // max_tokens：缺省 4096，上限 128000
@@ -289,7 +306,7 @@ mod tests {
             vec!["你是淬，自称一律用淬。".to_string()]
         );
 
-        // anthropic：前缀 N 块 → 注入 1 块（无 cache_control）→ 用户段 1 块（带）
+        // anthropic（非官方形态）：快照 N 块 → 用户段 1 块 → 注入段末尾（无 cache_control）
         let req = json!({
             "model": "glm-5.3-flash",
             "max_tokens": 100,
@@ -301,8 +318,29 @@ mod tests {
         let texts: Vec<&str> = sys.iter().filter_map(|b| b["text"].as_str()).collect();
         let inj_idx = texts.iter().position(|t| t.contains("你是淬")).expect("anthropic 注入缺失");
         let usr_idx = texts.iter().position(|t| *t == "用户追加段").expect("anthropic 用户段缺失");
-        assert!(inj_idx < usr_idx, "注入段应在用户段之前");
+        assert!(usr_idx < inj_idx, "注入段应在用户段之后");
         assert!(sys[inj_idx].get("cache_control").is_none(), "注入段不应带 cache_control");
+        // 快照兜底在用户段之前
+        let snap_idx = texts.iter().position(|t| t.starts_with("You are ZCode")).expect("快照前缀缺失");
+        assert!(snap_idx < usr_idx, "快照应在用户段之前");
+
+        // anthropic（客户端官方形态）：整组透传 + 注入段末尾，无快照重建、无官方身份双份
+        let req = json!({
+            "model": "glm-5.3-flash",
+            "max_tokens": 100,
+            "system": [
+                { "type": "text", "text": "You are ZCode, an interactive agent", "cache_control": { "type": "ephemeral" } },
+                { "type": "text", "text": "\nYou are an agent working with the user.", "cache_control": { "type": "ephemeral" } },
+            ],
+            "messages": [{ "role": "user", "content": "hi" }],
+        });
+        let out = anthropic_to_upstream(&req).unwrap();
+        let sys = out["system"].as_array().unwrap();
+        let texts: Vec<&str> = sys.iter().filter_map(|b| b["text"].as_str()).collect();
+        assert_eq!(texts.iter().filter(|t| t.starts_with("You are ZCode")).count(), 1, "官方身份应只出现一次: {texts:?}");
+        assert!(texts.iter().any(|t| t.contains("你是淬")), "官方形态注入缺失: {texts:?}");
+        // 客户端段的 cache_control 原样保留
+        assert!(sys[0].get("cache_control").is_some(), "透传块应保留原 cache_control");
 
         // openai
         let req = json!({
@@ -322,7 +360,7 @@ mod tests {
             .collect();
         let inj_idx = texts.iter().position(|t| t.contains("你是淬")).expect("openai 注入缺失");
         let usr_idx = texts.iter().position(|t| t == "be brief").expect("openai 用户段缺失");
-        assert!(inj_idx < usr_idx, "openai 注入段应在用户段之前");
+        assert!(usr_idx < inj_idx, "openai 注入段应在用户段之后");
 
         // responses
         let req = json!({
