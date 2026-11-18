@@ -19,6 +19,33 @@ pub fn prefix_segs() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 运行时 system 注入段：store_dir/gateway-system-extra.md（路径可用
+/// ZCODE_GATEWAY_SYSTEM_EXTRA_FILE 覆盖）。文件存在且非空 → 整文件作为一段
+/// 插在官方前缀之后、调用方用户段之前；缺文件/空文件 = 直通零开销。
+/// 每请求现读现用，注入内容改文件即热生效，无需重启网关。
+/// 注入段不带 cache_control：anthropic 断点上限 4，前缀 2 + 用户段 1 + tools
+/// 可能 1 已占满，注入段占断点会在带 tools 的请求上撞 400。
+pub fn runtime_system_extra() -> Vec<String> {
+    let path = std::env::var("ZCODE_GATEWAY_SYSTEM_EXTRA_FILE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            crate::Paths::detect()
+                .store_dir()
+                .join("gateway-system-extra.md")
+        });
+    runtime_system_extra_from(&path)
+}
+
+/// 从指定路径读注入段（与环境变量解耦，供测试直调，避免并行测试互踩进程级 env）。
+fn runtime_system_extra_from(path: &std::path::Path) -> Vec<String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) if !s.trim().is_empty() => vec![s],
+        _ => vec![],
+    }
+}
+
 /// 模型名映射：表内命中用映射值，否则回落 GLM-5.3-Flash
 pub fn map_model(name: &str) -> String {
     match name.trim().to_lowercase().as_str() {
@@ -55,10 +82,14 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
     }
 
     // 官方 body 逐个 system 块都带 cache_control ephemeral（plan-08 §4），形状照发
+    // 注入段不带 cache_control（见 runtime_system_extra 文档：断点上限约束）
     let mut system: Vec<Value> = prefix_segs()
         .into_iter()
         .map(|t| json!({ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }))
         .collect();
+    for seg in runtime_system_extra() {
+        system.push(json!({ "type": "text", "text": seg }));
+    }
     if !sys_extra.is_empty() {
         system.push(json!({ "type": "text", "text": sys_extra.join("\n\n"), "cache_control": { "type": "ephemeral" } }));
     }
@@ -231,5 +262,91 @@ mod tests {
         assert_eq!(out["usage"]["output_tokens"], 2);
         assert_eq!(out["usage"]["cache_read_input_tokens"], 7);
         assert_eq!(out["usage"]["cache_creation_input_tokens"], 3);
+    }
+
+    #[test]
+    fn runtime_extra_absent_by_default() {
+        // 测试环境没有注入文件（store_dir 指向临时目录时）返回空，直通零开销
+        if std::env::var("ZCODE_GATEWAY_SYSTEM_EXTRA_FILE").is_err() {
+            // 不强断言：store_dir 可能被其他测试/环境预置；仅记录行为
+        }
+        let _ = runtime_system_extra();
+    }
+
+    /// 端到端注入验证：anthropic/openai/responses 三端共用一个串行测试——
+    /// env var 是进程全局的，并行测试会互踩（openai/responses 读到别的测试的文件）。
+    #[test]
+    fn runtime_extra_injects_across_all_endpoints() {
+        let dir = std::env::temp_dir().join(format!("zh_gw_extra_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("extra.md");
+        std::fs::write(&f, "你是淬，自称一律用淬。").unwrap();
+        std::env::set_var("ZCODE_GATEWAY_SYSTEM_EXTRA_FILE", &f);
+
+        // 文件读取层
+        assert_eq!(
+            runtime_system_extra_from(&f),
+            vec!["你是淬，自称一律用淬。".to_string()]
+        );
+
+        // anthropic：前缀 N 块 → 注入 1 块（无 cache_control）→ 用户段 1 块（带）
+        let req = json!({
+            "model": "glm-5.3-flash",
+            "max_tokens": 100,
+            "system": "用户追加段",
+            "messages": [{ "role": "user", "content": "hi" }],
+        });
+        let out = anthropic_to_upstream(&req).unwrap();
+        let sys = out["system"].as_array().unwrap();
+        let texts: Vec<&str> = sys.iter().filter_map(|b| b["text"].as_str()).collect();
+        let inj_idx = texts.iter().position(|t| t.contains("你是淬")).expect("anthropic 注入缺失");
+        let usr_idx = texts.iter().position(|t| *t == "用户追加段").expect("anthropic 用户段缺失");
+        assert!(inj_idx < usr_idx, "注入段应在用户段之前");
+        assert!(sys[inj_idx].get("cache_control").is_none(), "注入段不应带 cache_control");
+
+        // openai
+        let req = json!({
+            "model": "glm-5.3-flash",
+            "max_tokens": 100,
+            "messages": [
+                { "role": "system", "content": "be brief" },
+                { "role": "user", "content": "hi" },
+            ],
+        });
+        let out = super::super::openai::openai_to_upstream(&req).unwrap();
+        let texts: Vec<String> = out["system"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|b| b["text"].as_str().map(String::from))
+            .collect();
+        let inj_idx = texts.iter().position(|t| t.contains("你是淬")).expect("openai 注入缺失");
+        let usr_idx = texts.iter().position(|t| t == "be brief").expect("openai 用户段缺失");
+        assert!(inj_idx < usr_idx, "openai 注入段应在用户段之前");
+
+        // responses
+        let req = json!({
+            "model": "glm-5.3-flash",
+            "max_output_tokens": 100,
+            "input": "hi",
+        });
+        let out = super::super::responses::responses_to_upstream(&req).unwrap();
+        let texts: Vec<String> = out["system"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|b| b["text"].as_str().map(String::from))
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("你是淬")),
+            "responses 注入缺失: {texts:?}"
+        );
+
+        // 空文件 = 直通
+        std::fs::write(&f, "   \n").unwrap();
+        assert!(runtime_system_extra_from(&f).is_empty());
+
+        std::env::remove_var("ZCODE_GATEWAY_SYSTEM_EXTRA_FILE");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

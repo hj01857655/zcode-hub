@@ -3,7 +3,7 @@
 // thinking 走 output_config.effort、上游一律 stream=true、metadata.user_id 内嵌 JSON 串。
 use serde_json::{json, Value};
 
-use super::translate::{map_model, prefix_segs};
+use super::translate::{map_model, prefix_segs, runtime_system_extra};
 
 /// 入站 OpenAI 消息的宽松视图（content 兼容 string 与块数组）
 fn flatten_text(content: &Value) -> Vec<String> {
@@ -213,6 +213,11 @@ pub fn openai_to_upstream(req: &Value) -> Result<Value, String> {
         .into_iter()
         .map(|t| json!({ "type": "text", "text": t }))
         .collect();
+    // 运行时注入段（官方前缀后、调用方 system 段前）：无 cache_control，
+    // 与本通道"前缀/追加段均不带"的形状一致（Go translate.go 对齐）
+    for seg in runtime_system_extra() {
+        system.push(json!({ "type": "text", "text": seg }));
+    }
     if !sys_extra.is_empty() {
         system.push(json!({ "type": "text", "text": sys_extra.join("\n\n") }));
     }
