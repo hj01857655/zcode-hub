@@ -67,22 +67,9 @@ pub fn log(flow: &str, event: &str, detail: &str) {
 }
 
 /// HTTP 事件专用落行（status/ms/body 可选：请求行 http-req 只有 method/url/body，
-/// 网络错行 status=0 无 body，正常响应行全量）。调用方负责 body 的截断策略
-/// （见 httplog::body_for_log），本层只管结构与转义。
-pub fn log_http(
-    flow: &str,
-    event: &str,
-    method: &str,
-    url: &str,
-    status: Option<u16>,
-    ms: Option<u64>,
-    body: Option<&str>,
-) {
-    log_http_with_headers(flow, event, method, url, status, ms, body, None, None);
-}
-
-/// 带请求/响应头的落行变体：头字符串由调用方序列化（见 httplog::headers_for_log），
-/// 本层不接触原始头值。中间件走这里，quota 裸链与手动落行走 log_http。
+/// 网络错行 status=0 无 body，正常响应行全量）。头字符串由调用方序列化
+/// （见 httplog::headers_for_log），body 截断策略见 httplog::body_for_log，
+/// 本层只管结构与转义。全部调用方（中间件、quota 裸链、手动落行）走这里。
 #[allow(clippy::too_many_arguments)]
 pub fn log_http_with_headers(
     flow: &str,
