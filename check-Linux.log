@@ -1,0 +1,10 @@
+[1m[92m    Updating[0m crates.io index
+[1m[91merror[0m: failed to join paths from `$LD_LIBRARY_PATH` together
+
+Check if any of path segments listed below contain an unterminated quote character or path separator:
+    "/home/runner/work/zcode-hub/zcode-hub/src-tauri/C:\\t/debug"
+    "/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib"
+    "/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib"
+
+Caused by:
+  path segment contains separator `:`
