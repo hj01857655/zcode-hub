@@ -242,9 +242,11 @@ export default function GatewayLogsPage() {
         return (fb - fa) || (b.n - a.n);
       });
   }, [filtered, groupDim]);
-  // 折叠树展开态：Set<组键>，组节点点击切换展开/收起；换维度或筛选重算时自动全收
+  // 折叠树展开态：Set<组键>，组节点点击切换展开/收起；换维度或改筛选条件时自动全收。
+  // 这里盯的是筛选输入本身而非 filtered——filtered 是 useMemo 出的新数组引用，自动刷新
+  // 每 5s 换一次引用，盯它会把每次数据轮询都当成「筛选变化」，展开态永远保不住
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
-  useEffect(() => { setExpandedGroups(new Set()); }, [filtered, groupDim]);
+  useEffect(() => { setExpandedGroups(new Set()); }, [groupDim, epFilter, okFilter, q, rangeFilter]);
   const toggleGroup = (key) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
