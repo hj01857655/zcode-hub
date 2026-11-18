@@ -1,0 +1,4 @@
+# cl.exe 的 D8050 硬限制：debug 目标路径过长时命令行写不进调试记录。
+# 官方解法即缩短路径，用盘符根目录作 target-dir（与 CARGO_TARGET_DIR=C:\t 等效）。
+[build]
+target-dir = "C:\t"
