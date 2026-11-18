@@ -732,7 +732,22 @@ input:focus-visible,
   align-items: flex-start;
   gap: 9px;
   animation: toast-in .18s ease;
+  /* 容器 pointer-events:none 让 toast 层不挡主界面；本体必须恢复接收事件，
+     否则点击展开/选中复制/右键菜单全部被穿透失效 */
+  pointer-events: auto;
+  user-select: text;
+  cursor: default;
 }
+.toast .t-copy {
+  flex: none;
+  width: 24px; height: 24px;
+  margin-top: 1px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; border-radius: 5px;
+  color: var(--ink-mute); cursor: pointer; padding: 0;
+}
+.toast .t-copy:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
+.toast .t-copy.copied { color: var(--mint); }
 .toast .t-ic { flex: none; margin-top: 4px; color: var(--ink-mute); }
 .toast.ok .t-ic { color: var(--mint); }
 .toast.err .t-ic { color: var(--red); }

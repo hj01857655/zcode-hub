@@ -1,9 +1,10 @@
 // React 版设置页：嵌入主窗口（App 侧边栏）与独立路径共用，弹窗/toast 复用 ui-react.jsx，
 // 其副作用（右键与快捷键屏蔽）随导入生效
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast, openPwModal, dismissSplash } from "../components/ui-bus.js";
+import { store, actions, runtimeFlags, subscribe, getVersion } from "../lib/store.js";
 import { Ic } from "../components/iconsx.jsx";
 import { init, t, lang, stripErr, beginLangSync, endLangSync, syncLang, patchLang } from "../lib/i18n.js";
 import { currentTheme, setTheme } from "../lib/theme.js";
@@ -64,6 +65,21 @@ function CloseSeg({ cur, onPick }) {
         <button className={"lang-opt" + (cur === "exit" ? " on" : "")} role="radio" aria-checked={cur === "exit"} onClick={() => onPick("exit")}>{t("s.closeBehaviorExit")}</button>
       </div>
     </div>
+  );
+}
+
+// 设置页「全部领取」按钮：与账号页工具栏同一个 claimAll 动作、同一套互斥 disabled，
+// 自动领取的开关本身只在账号页保留一处，避免两处控制同一字段
+function ClaimAllButton({ state }) {
+  // 订阅 store：自动 touch/claim 的 emit 会更新可领计数与运行标志，与账号页同款
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning, autoTouchRunning } = runtimeFlags();
+  const claimable = (state?.accounts || []).filter((a) => (store.claimable[a.id]?.plans || []).length > 0).length;
+  const disabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning || autoTouchRunning || !claimable;
+  return (
+    <button className="btn-ghost has-ic" onClick={() => actions.claimAll()} disabled={disabled} title={t("btn.claimAllTitle")}>
+      <Ic name="gift" size={14} /> {t("s.claimAllBtn")}{claimable ? ` (${claimable})` : ""}
+    </button>
   );
 }
 
@@ -269,6 +285,21 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
       });
     },
 
+    // 自动 touch / 自动领取拆分开关：与账号页工具栏的 auto_claim 开关共用盘上值。
+    // 只传各自字段，其余 Option 参数为 null 不动
+    toggleAutoTouch: () => {
+      const k = "auto_touch";
+      const next = !readOpt(k);
+      optRef.current[k] = next;
+      setState((v) => ({ ...v, [k]: next }));
+      enqueueToggle(async () => {
+        await invoke("set_behavior", { autoTouch: next });
+        delete optRef.current[k];
+      });
+    },
+
+    // 自动领取的开关只在账号页保留一处，设置页这里只放一次性「全部领取」按钮（走同一 claimAll 动作）
+
     setCloseBehavior: (mode) => {
       const k = "close_to_tray";
       const next = mode === "min";
@@ -362,6 +393,14 @@ export default function SettingsPage({ embedded = false, initialState = null, vi
           <Toggle on={s.launch_after_switch} label={t("s.launchAfter")} desc={t("s.launchAfterDesc")} onClick={() => actions.toggleBehavior("launch")} />
           <CloseSeg cur={s.close_to_tray ? "min" : "exit"} onPick={actions.setCloseBehavior} />
           <Toggle on={s.hot_switch} label={t("s.hotSwitch")} desc={t("s.hotSwitchDesc")} onClick={() => actions.toggleBehavior("hot")} />
+          <Toggle on={s.auto_touch} label={t("s.autoTouch")} desc={t("s.autoTouchDesc")} onClick={actions.toggleAutoTouch} />
+          <div className="tog-row">
+            <div className="tog-info">
+              <div className="tog-label">{t("s.claimAllBtn")}</div>
+              <div className="tog-desc">{t("s.claimAllBtnDesc")}</div>
+            </div>
+            <ClaimAllButton state={s} />
+          </div>
         </div>
         <div className="set-card">
           <label>{t("s.pxLabel")}</label>

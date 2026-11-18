@@ -16,7 +16,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && ["u", "s"].includes(e.key.toLowerCase())) e.preventDefault();
 });
 
-import { ui, emit, subscribe, getVersion, toast } from "./ui-bus.js";
+import { ui, emit, subscribe, getVersion, toast, toastHold } from "./ui-bus.js";
 
 function useUi() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -26,12 +26,29 @@ function useUi() {
 function Toast({ x }) {
   // 长 detail（多行/超长，如完整响应体）默认收起，点击整条切换展开
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const long = !!x.detail && (x.detail.includes("\n") || x.detail.length > 90);
   const shown = long && !open ? x.detail.split("\n")[0].slice(0, 90) + "…" : x.detail;
+  // 拖选结束后触发的 click 不切换展开：有选区 = 用户在复制，不是在点
+  const toggle = long ? (e) => { if (!String(getSelection() || "")) setOpen(!open); } : undefined;
+  const copyAll = async () => {
+    const text = x.msg + (x.detail ? "\n" + x.detail : "");
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch { /* noop */ }
+      ta.remove();
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 1200);
+  };
   return (
     <div
       className={"toast " + x.kind + (long ? " expandable" : "") + (open ? " open" : "")}
-      onClick={long ? () => setOpen(!open) : undefined}
+      onClick={toggle}
+      onMouseEnter={() => toastHold(x.id, true)}
+      onMouseLeave={() => toastHold(x.id, false)}
       title={long ? t(open ? "m.toastCollapse" : "m.toastExpand") : undefined}
     >
       <span className="t-ic"><Ic name={x.kind === "ok" ? "check" : "alert"} size={16} /></span>
@@ -44,6 +61,14 @@ function Toast({ x }) {
             </span>
           : ""}
       </span>
+      {x.kind !== "ok"
+        ? <button className={"t-copy" + (copied ? " copied" : "")}
+            title={t(copied ? "m.toastCopied" : "m.toastCopy")}
+            aria-label={t("m.toastCopy")}
+            onClick={(e) => { e.stopPropagation(); copyAll(); }}>
+            <Ic name={copied ? "check" : "copy"} size={13} />
+          </button>
+        : null}
     </div>
   );
 }

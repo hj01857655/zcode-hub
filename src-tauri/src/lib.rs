@@ -1238,6 +1238,7 @@ async fn set_behavior(
     close_to_tray: Option<bool>,
     hot_switch: Option<bool>,
     auto_claim: Option<bool>,
+    auto_touch: Option<bool>,
 ) -> Result<(), String> {
     let _guard = store_guard();
     let paths = Paths::detect();
@@ -1253,6 +1254,9 @@ async fn set_behavior(
     }
     if let Some(v) = auto_claim {
         s.auto_claim = Some(v);
+    }
+    if let Some(v) = auto_touch {
+        s.auto_touch = Some(v);
     }
     // 行为开关全都是即时读盘生效的单项配置：不重建托盘（主线程跑全量 get_state
     // 会阻塞 WebView），也不广播 state-changed（会触发两处全量 refresh 且把乐观

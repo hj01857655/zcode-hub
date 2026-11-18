@@ -15,14 +15,33 @@ export function dismissSplash() {
   setTimeout(() => el.remove(), 220);
 }
 
+const TOAST_MS = { plain: 3200, detail: 5200 };
+// 每条 toast 的存活定时器：hover 暂停时清除，离开时按半程重排——
+// 没有暂停的话 3.2s/5.2s 根本来不及选中复制报错内容
+const toastTimers = new Map();
+
+function armToast(id, ms) {
+  clearTimeout(toastTimers.get(id));
+  toastTimers.set(id, setTimeout(() => {
+    toastTimers.delete(id);
+    ui.toasts = ui.toasts.filter((x) => x.id !== id);
+    emit();
+  }, ms));
+}
+
 export function toast(msg, kind = "ok", detail = "") {
   const id = ++toastSeq;
   ui.toasts = [...ui.toasts, { id, msg: String(msg), kind, detail: detail ? String(detail) : "" }];
   emit();
-  setTimeout(() => {
-    ui.toasts = ui.toasts.filter((x) => x.id !== id);
-    emit();
-  }, detail ? 5200 : 3200);
+  armToast(id, detail ? TOAST_MS.detail : TOAST_MS.plain);
+}
+
+// hover 暂停/恢复（Toast 组件 mouseenter/leave 接线）
+export function toastHold(id, hold) {
+  const t = ui.toasts.find((x) => x.id === id);
+  if (!t) return;
+  if (hold) clearTimeout(toastTimers.get(id));
+  else armToast(id, (t.detail ? TOAST_MS.detail : TOAST_MS.plain) / 2);
 }
 
 export function openConfirmModal(m) {

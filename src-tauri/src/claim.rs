@@ -95,6 +95,10 @@ pub struct ClaimError {
     /// 业务码（响应体 JSON 的 code 字段）：HTTP 层错误（429/405/5xx）从 body 解析，
     /// 业务层错误直接取。0 = 成功无此字段场景
     pub biz_code: i64,
+    /// 服务端响应体原文（完整 body，不做任何字段提取或映射）。
+    /// message 字段是「本地映射文案 + 提取的 msg」拼接——映射写错或服务端
+    /// 语义变化时，这个字段保证完整 body 始终可查、可独立展示
+    pub server_body: Option<String>,
 }
 
 impl From<String> for ClaimError {
@@ -105,6 +109,7 @@ impl From<String> for ClaimError {
             next_at: None,
             http_status: 0,
             biz_code: -1,
+            server_body: None,
         }
     }
 }
@@ -123,6 +128,8 @@ fn claim_error(code: i64, body: &Value) -> ClaimError {
         // 业务层拒绝：HTTP 200 + 业务码
         http_status: 200,
         biz_code: code,
+        // 完整 body 原文：前端映射文案之外还能看到服务端真正返回了什么
+        server_body: Some(body.to_string()),
     }
 }
 
@@ -154,6 +161,7 @@ pub fn failure_payload(
         "code": err.code,
         "nextAt": err.next_at,
         "message": err.message,
+        "serverBody": err.server_body,
         "httpStatus": err.http_status,
         "bizCode": err.biz_code,
     })
@@ -555,6 +563,7 @@ pub fn submit_claim(
             next_at: None,
             http_status: 0,
             biz_code: -1,
+            server_body: None,
         }
     })?;
     let (status, resp) = crate::httplog::read_resp(resp).map_err(|e| ClaimError {
@@ -563,6 +572,7 @@ pub fn submit_claim(
         next_at: None,
         http_status: 0,
         biz_code: -1,
+        server_body: None,
     })?;
     if (400..600).contains(&status) {
         // HTTP 4xx/5xx（405+3012 拒绝、HTTP 429）：错误分支两条轨并行——
@@ -586,6 +596,8 @@ pub fn submit_claim(
             next_at: None,
             http_status: i64::from(status),
             biz_code: biz,
+            // 完整响应体原文（JSON / WAF HTML 页都原样保留），前端可独立展示
+            server_body: Some(resp.clone()),
         });
     }
     let v: Value = serde_json::from_str(&resp).unwrap_or(Value::String(resp.clone()));
@@ -778,11 +790,26 @@ fn fmt_units(n: f64) -> String {
     }
 }
 
-pub fn failure_message(code: i64, body: &Value) -> String {
-    let server_msg = ["msg", "message"]
+/// 从响应体提取 msg/message 供映射文案拼接（映射行为不变）。
+/// 完整的 body 原文另存 ClaimError.server_body，不依赖这里的提取。
+/// 官方 host 的失败分支读 data.message（r.data?.message），顶层 msg/message
+/// 缺失时再探 data 内层——与官方显示语义对齐，服务端原文优先于本地映射
+fn extract_msg(body: &Value) -> Option<String> {
+    ["msg", "message"]
         .iter()
         .find_map(|k| body.get(k).and_then(|x| x.as_str()).map(String::from))
-        .unwrap_or_default();
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            body.get("data")
+                .and_then(|d| d.get("message"))
+                .and_then(|x| x.as_str())
+                .map(String::from)
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
+pub fn failure_message(code: i64, body: &Value) -> String {
+    let server_msg = extract_msg(body).unwrap_or_default();
     let base = crate::i18n::tr(match code {
         1001 => "claim.fail.1001",
         1002 => "claim.fail.1002",
@@ -805,6 +832,24 @@ pub fn failure_message(code: i64, body: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn full_body_is_preserved_independent_of_mapping() {
+        let body = json!({ "code": 1003, "message": "Plan already claimed", "extra": {"nested": 1} });
+        let err = claim_error(1003, &body);
+        // 完整 body 原文（含映射不认识的 extra 字段）原样保留
+        assert_eq!(err.server_body.as_deref(), Some(body.to_string().as_str()));
+        // 映射后的 message 仍是「本地文案 + 提取的 msg」，与完整 body 分工明确
+        assert!(err.message.contains("Plan already claimed"));
+        assert_ne!(err.message, err.server_body.clone().unwrap());
+        // payload 把完整 body 透出给前端
+        let p = failure_payload("id", "name", "plan", &err);
+        assert_eq!(p["serverBody"], body.to_string());
+        // 映射用的提取函数仍认 msg/message 双键、顺序、空白过滤
+        assert_eq!(extract_msg(&json!({ "msg": "first", "message": "second" })).as_deref(), Some("first"));
+        assert_eq!(extract_msg(&json!({ "message": "   " })), None);
+        assert_eq!(extract_msg(&json!({})), None);
+    }
 
     /// 文档 §3 实测形状：active 套餐 + entitlements 有桶行覆盖 → 已生效，非待生效
     #[test]

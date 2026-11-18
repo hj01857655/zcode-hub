@@ -55,15 +55,21 @@ const AUTO_CLAIM_FIRST_DELAY_MS = 2 * 60 * 1000;
 const BOOT_UPDATE_CHECK_MS = 15_000;
 const AUTO_CLAIM_WAIT_MS = 45_000;
 const AUTO_CLAIM_PER_ACCOUNT_CAP = 5;
-const AUTO_CLAIM_ACCT_GAP_MS = 2_000;
-const AUTO_ABORT_WAIT_MS = 90_000;
+// 号与号之间 5s：领取通道 3012/405 按出口 IP 计数（SecurityReject 1h 起步），
+// 串行间隔太短等于同一 IP 连续打风控敏感端点
+const AUTO_CLAIM_ACCT_GAP_MS = 5_000;
+const AUTO_ABORT_WAIT_MS = 10 * 60 * 1000;
 let autoClaimRunning = false;
+// 错相拆分后的第二条循环：touch 查询在跑的标志（与 autoClaimRunning 互斥）
+let autoTouchRunning = false;
+// touch 循环最近一轮摘要（at/ok/fail），tooltip 与 lastAutoRound 并列展示
+let lastTouchRound = null;
 const autoClaimCooldown = {};
 let autoAbortRequested = false;
 let claimActive = false;
 let lastAutoRound = null;
 let autoToggleBusy = false;
-// 单号刷新资格在跑的标志：它只占 claimable[id].busy，批量刷新/自动领取开关看不到它
+// 单号探测在跑的标志：它只占 claimable[id].busy，批量探测/自动领取开关看不到它
 let refreshOneBusy = false;
 
 const SWEEP_PERIOD = 5 * 60 * 1000;
@@ -199,7 +205,7 @@ let referralBindRunning = false;
 
 // 验证码窗口是 claim/bind 共用的单一资源：后端在任一侧发起时清掉对方 pending，
 // 前端一侧进行时另一侧直接拒绝，避免被清方的 waiter 干等 90s 超时
-const claimSideBusy = () => !!(claimWaiter || claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning);
+const claimSideBusy = () => !!(claimWaiter || claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning || autoTouchRunning);
 const referralSideBusy = () => !!(referralWaiter || referralBindRunning);
 
 export async function loadReferral(id) {
@@ -266,7 +272,14 @@ export const accountName = (id) => (store.state?.accounts || []).find((a) => a.i
 
 export function autoPillTitle(s) {
   const bits = [t("btn.autoClaimTitle")];
-  if (autoClaimRunning) bits.push(t(s.auto_claim ? "m.autoClaimRound" : "m.autoClaimStopping"));
+  if (autoTouchRunning || autoClaimRunning) bits.push(t((s.auto_claim || s.auto_touch) ? "m.autoClaimRound" : "m.autoClaimStopping"));
+  if (lastTouchRound) {
+    const d = new Date(lastTouchRound.at);
+    const time = d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString(localeTag(), { hour12: false })
+      : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${d.toLocaleTimeString(localeTag(), { hour12: false })}`;
+    bits.push(t("m.autoTouchLast", { time, ok: lastTouchRound.ok, fail: lastTouchRound.fail }));
+  }
   if (lastAutoRound) {
     const d = new Date(lastAutoRound.at);
     const time = d.toDateString() === new Date().toDateString()
@@ -318,10 +331,12 @@ async function sweepTick() {
 // 批量跳过判定：登录令牌已过期 / 快照缺资格登录信息的号刷了必失败，批量操作前剔除
 const skipReason = (a) => (a?.jwt_expired ? t("btn.jwtExpired") : a?.has_user_info === false ? t("btn.relogin") : null);
 
-// 有界并发批量刷新资格：claim_refresh_one 每号独立、跑 blocking 线程池无共享锁。
-// 并发档位与 sweep / 邀请页同款（4 + 800ms 错峰）
+// 有界并发批量探测投放：claim_refresh_one 每号独立、跑 blocking 线程池无共享锁。
+// 并发硬上限 2：一次最多同时探测两个账号，批间隔 60s——
+// 15 号分 8 批约 7 分钟、20 号约 9 分钟，号间充分拉开避免 429。
+// 调度器 await 本轮完成后才排下一轮，探测超时也不会与前一轮重叠。调用方传 chunkGapMs
 async function refreshClaimBatch(ids, chunkGapMs, onOne) {
-  const CONCURRENCY = 4;
+  const CONCURRENCY = 2;
   for (let i = 0; i < ids.length; i += CONCURRENCY) {
     await Promise.all(ids.slice(i, i + CONCURRENCY).map((id) => onOne(id)));
     if (i + CONCURRENCY < ids.length) await new Promise((res) => setTimeout(res, chunkGapMs));
@@ -363,12 +378,139 @@ function autoClaimCooldownFor(r) {
   return now + AUTO_CLAIM_INTERVAL_MS;
 }
 
-async function autoClaimTick() {
-  if (!store.state?.auto_claim || autoClaimRunning) return;
-  if (claimActive || claimAllRunning || refreshClaim.running) return;
+// 单号自动领取核心：claim_start（内部自带 touch 重取投放）→ 等结果 → 冷却/重试。
+// 从 autoClaimTick 拆出：探测循环的跟领与兜底扫描共用一条路径，语义不分叉
+async function claimOneAutoCore(id) {
+  let gotAny = false;
+  let attempts = 0;
+  let progressed = true;
+  while (progressed && attempts < AUTO_CLAIM_PER_ACCOUNT_CAP) {
+    if (autoAbortRequested) break;
+    attempts++;
+    progressed = false;
+    const plan = store.claimable[id]?.plans?.[0];
+    if (!plan) break;
+    if (referralSideBusy()) { // bind 占用验证码窗口：本轮跳过，冷却后重试
+      autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+      break;
+    }
+    try {
+      await invoke("claim_start", { id, planId: plan.plan_id, auto: true });
+    } catch (e) {
+      await invoke("claim_cancel").catch(() => {});
+      autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+      break;
+    }
+    const r = await waitForClaimResult(id, AUTO_CLAIM_WAIT_MS);
+    if (!r) {
+      await invoke("claim_cancel").catch(() => {});
+      autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+      break;
+    }
+    if (r.ok === false) {
+      autoClaimCooldown[id] = autoClaimCooldownFor(r);
+      break;
+    }
+    gotAny = true;
+    await awaitClaimableFresh(id);
+    emit();
+    progressed = true;
+    await new Promise((res) => setTimeout(res, 1200));
+  }
+  return gotAny;
+}
+
+// 探测跟领串行链：探测批并发 2，两个号同时 touch 到投放时领取必须排队——
+// 验证码会话单例（claimWaiter 单槽）+ 出口 IP 级风控，领取全局串行。
+// 跟领是投放 TTL 的唯一解：11-17 实测投放签发后约 30s 过期（探测 25s 后才
+// 轮到的号 claim_start 内部 touch 全部 claim.gone），只有「touch 到资格立刻
+// 领」能赶在过期前提交；先探测完再领取的两段式后半段注定过期
+let autoClaimChain = Promise.resolve();
+function enqueueAutoClaim(id) {
+  const run = autoClaimChain.then(async () => {
+    if (!store.state?.auto_claim || autoAbortRequested) return false;
+    if (autoClaimRunning || claimAllRunning) return false;
+    if (!(store.claimable[id]?.plans || []).length) return false;
+    if ((autoClaimCooldown[id] ?? 0) > Date.now()) return false;
+    autoClaimRunning = true; claimActive = true;
+    emit();
+    try {
+      return await claimOneAutoCore(id);
+    } finally {
+      autoClaimRunning = false; claimActive = false;
+      emit();
+    }
+  });
+  autoClaimChain = run.catch(() => {});
+  return run;
+}
+
+// 手动入口等待自动领取收尾：跟领链 + 兜底扫描共用 autoClaimRunning/claimActive，
+// 一轮领取含验证码提交最长 AUTO_CLAIM_WAIT_MS/号，等待上限按一轮 14 号 + 余量给
+async function waitClaimIdle(maxMs = 5 * 60 * 1000) {
+  const deadline = Date.now() + maxMs;
+  while ((autoClaimRunning || claimActive) && Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  return !(autoClaimRunning || claimActive);
+}
+
+// 自动 touch：批量查投放填 claimable 缓存。与领取循环错相运行（相位差半周期），
+// 任何时刻只有一条循环在上游打请求——touch 429 按请求级计数、claim 3012 按出口 IP
+// 级计数，两通道挤同一时间窗是双重风控放大器
+async function autoTouchTick() {
+  if (!store.state?.auto_touch || autoTouchRunning) return;
+  if (autoClaimRunning || claimActive || claimAllRunning || refreshClaim.running || refreshOneBusy) return;
   const ids = (store.state.accounts || [])
     .filter((a) => !skipReason(a))
     .map((a) => a.id)
+    .filter((id) => (autoClaimCooldown[id] ?? 0) <= Date.now());
+  if (!ids.length) return;
+  autoTouchRunning = true; autoAbortRequested = false;
+  let roundOk = 0, roundFail = 0;
+  emit();
+  try {
+    // 批间 60s：15 号分 8 批约 7 分钟打完一轮，号间充分拉开是 429 主要缓解手段
+    const accIds = () => store.state.accounts || [];
+    await refreshClaimBatch(ids, 60_000, async (id) => {
+      if (!store.state?.auto_touch || autoAbortRequested) return;
+      if (!accIds().some((a) => a.id === id)) return;
+      store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
+      try {
+        const plans = (await invoke("claim_refresh_one", { id })) || [];
+        store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await pendingCheckThrottled(id)) || null };
+        // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
+        if (!plans.length) loadClaimHistory(id);
+        // 融合跟领：自动领取开着时，touch 到投放立刻排队提交（enqueue 内部校验
+        // auto_claim/互斥/冷却），不await——批节奏不受影响，领取走串行链
+        if (plans.length) enqueueAutoClaim(id);
+        roundOk++;
+      } catch (e) {
+        store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
+        // touch 失败的号同步进领取冷却：查询失败的号本轮无从领取
+        autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+        roundFail++;
+      }
+    });
+  } finally {
+    autoTouchRunning = false;
+    if (store.state?.auto_touch) lastTouchRound = { at: Date.now(), ok: roundOk, fail: roundFail };
+    emit();
+    // 探测完 3s 立即触发领取：一轮探测要 7-9min，固定错相的 claim 跳
+    // 那时探测还没结束会被 gate 跳过，靠这个联动才不会拖到下一相位
+    maybeAutoClaimAfterTouch();
+  }
+}
+
+// 自动领取：消费 claimable 缓存（由 touch 循环或手动刷新填充）。缓存空 = 零上游
+// 流量直接空转；领取不做独立周期——touch 查到有投放才有东西可领
+async function autoClaimTick() {
+  if (!store.state?.auto_claim || autoClaimRunning) return;
+  if (autoTouchRunning || claimActive || claimAllRunning || refreshClaim.running || refreshOneBusy) return;
+  const ids = (store.state.accounts || [])
+    .filter((a) => !skipReason(a))
+    .map((a) => a.id)
+    .filter((id) => (store.claimable[id]?.plans || []).length > 0)
     .filter((id) => (autoClaimCooldown[id] ?? 0) <= Date.now());
   if (!ids.length) {
     if ((store.state.accounts || []).some((a) => (store.claimable[a.id]?.plans || []).length > 0)) {
@@ -380,66 +522,14 @@ async function autoClaimTick() {
   let roundClaimed = 0, roundSkipped = 0;
   emit();
   try {
-    // 阶段 1：查询有界并发（refreshClaimBatch：并发 2 + chunk 间隔）
-    const accIds = () => store.state.accounts || [];
-    await refreshClaimBatch(ids, 800, async (id) => {
-      if (!store.state?.auto_claim || autoAbortRequested) return;
-      if (!accIds().some((a) => a.id === id)) return;
-      store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
-      try {
-        const plans = (await invoke("claim_refresh_one", { id })) || [];
-        store.claimable[id] = { plans, err: null, busy: false, pending: plans.length ? null : (await pendingCheckThrottled(id)) || null };
-        // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
-        if (!plans.length) loadClaimHistory(id);
-      } catch (e) {
-        store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: String(e), busy: false };
-        autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
-        roundSkipped++;
-      }
-    });
-    emit();
-    // 阶段 2：领取保持串行——验证码会话单例（claimWaiter 单槽），且 429/风控按出口 IP 计数，并发领取得不偿失
+    // 领取保持串行——验证码会话单例（claimWaiter 单槽），且 429/风控按出口 IP 计数，并发领取得不偿失
     for (const id of ids) {
       if (!store.state?.auto_claim || autoAbortRequested) break;
       if (!(store.state.accounts || []).some((a) => a.id === id)) continue;
       if (autoClaimCooldown[id] > Date.now()) continue;
-      let gotAny = false;
-      let attempts = 0;
-      let progressed = true;
-      while (progressed && attempts < AUTO_CLAIM_PER_ACCOUNT_CAP) {
-        if (autoAbortRequested) break;
-        attempts++;
-        progressed = false;
-        const plan = store.claimable[id]?.plans?.[0];
-        if (!plan) break;
-        if (referralSideBusy()) { // bind 占用验证码窗口：本轮跳过，冷却后重试
-          autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
-          break;
-        }
-        try {
-          await invoke("claim_start", { id, planId: plan.plan_id, auto: true });
-        } catch (e) {
-          await invoke("claim_cancel").catch(() => {});
-          autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
-          break;
-        }
-        const r = await waitForClaimResult(id, AUTO_CLAIM_WAIT_MS);
-        if (!r) {
-          await invoke("claim_cancel").catch(() => {});
-          autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
-          break;
-        }
-        if (r.ok === false) {
-          autoClaimCooldown[id] = autoClaimCooldownFor(r);
-          break;
-        }
-        gotAny = true; roundClaimed++;
-        await awaitClaimableFresh(id);
-        emit();
-        progressed = true;
-        await new Promise((res) => setTimeout(res, 1200));
-      }
-      if (!gotAny && (store.claimable[id]?.plans || []).length) roundSkipped++;
+      const got = await claimOneAutoCore(id);
+      if (got) roundClaimed++;
+      else if ((store.claimable[id]?.plans || []).length) roundSkipped++;
       await new Promise((res) => setTimeout(res, AUTO_CLAIM_ACCT_GAP_MS));
     }
   } finally {
@@ -447,6 +537,27 @@ async function autoClaimTick() {
     if (store.state?.auto_claim) lastAutoRound = { at: Date.now(), claimed: roundClaimed, skipped: roundSkipped };
     emit();
   }
+}
+
+// 错相调度：两条循环名义周期 10min，claim 相位错开半周期。
+// touch 一轮要 7-9min（60s × 7-8 批），探测期间 claim 的相位跳会被 gate 跳过；
+// 探测结束后由 maybeAutoClaimAfterTouch 3s 内触发领取兜底，不会拖到下一相位。
+// 调度器 await 本轮完成后才排下一轮，探测再慢也不会与前一轮重叠。
+let autoTouchTimer = null, autoClaimTimer = null;
+function scheduleTouch(delayMs) {
+  clearTimeout(autoTouchTimer);
+  autoTouchTimer = setTimeout(async () => {
+    // try/finally 确保 tick 本身或 finally 里的 emit 抛异常时，调度链仍继续
+    try { await autoTouchTick(); } catch { /* 单轮异常不能终止整条定时链 */ }
+    scheduleTouch(AUTO_CLAIM_INTERVAL_MS);
+  }, delayMs);
+}
+function scheduleClaim(delayMs) {
+  clearTimeout(autoClaimTimer);
+  autoClaimTimer = setTimeout(async () => {
+    try { await autoClaimTick(); } catch { /* 同上 */ }
+    scheduleClaim(AUTO_CLAIM_INTERVAL_MS);
+  }, delayMs);
 }
 
 function startRefreshTicker() {
@@ -458,6 +569,27 @@ function stopRefreshTickerIfIdle() {
   if (!refreshClaim.running && !cooling && refreshTicker) {
     clearInterval(refreshTicker); refreshTicker = null; emit();
   }
+}
+
+// 手动入口等待自动 touch 收尾：一轮探测 60s × 7-8 批约 7-9min，等待上限按
+// 一轮最长时间 + 余量给 12min。等待期间按钮 disabled，用户能看到探测进度；
+// 超时（异常卡死）才提示稍后再试
+async function waitTouchIdle(maxMs = 12 * 60 * 1000) {
+  const deadline = Date.now() + maxMs;
+  while (autoTouchRunning && Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  return !autoTouchRunning;
+}
+
+// 手动 touch（批量/单号）查到投放且自动领取开着：3s 缓冲后立即消费缓存，
+// 不等下一相位（最多 10min）。3s 让 touch 连接收尾；错相 gate 保证与在跑
+// 循环互斥，claim 失败自带冷却退避
+function maybeAutoClaimAfterTouch() {
+  if (!store.state?.auto_claim) return;
+  const hasPlans = (store.state.accounts || []).some((a) => (store.claimable[a.id]?.plans || []).length > 0);
+  if (!hasPlans) return;
+  setTimeout(() => { autoClaimTick(); }, 3000);
 }
 
 // ---- 动作（原 actions 对象，render() 全部换成 emit()） ----
@@ -671,15 +803,37 @@ export const actions = {
   },
 
   async claim(id) {
+    // 单号融合领取：touch 重发投放 → 拿到就 claim_start（内部 touch 复核）→ 验证码/结果。
+    // 不吃缓存——投放 TTL ~30s（11-17 实测），缓存版领取只会撞 claim.gone（两段式后半段全灭）
+    const a = (store.state?.accounts || []).find((x) => x.id === id);
+    const name = a?.name || id;
     if (claimActive || claimAllRunning || refreshClaim.running) { toast(t("m.claimBusy"), "warn"); return; }
     if (referralSideBusy()) { toast(t("m.captchaBusy"), "warn"); return; }
-    const plans = store.claimable[id]?.plans || [];
-    const plan = plans[0];
-    if (!plan) { toast(t("m.noClaimable"), "warn"); return; }
+    if (!(await waitTouchIdle())) { toast(t("m.claimBusy"), "warn"); return; }
+    if (claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning || autoTouchRunning) return;
     claimActive = true;
     emit();
     try {
-      await invoke("claim_start", { id, planId: plan.plan_id });
+      let plans = [];
+      try {
+        store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
+        emit();
+        plans = (await invoke("claim_refresh_one", { id })) || [];
+        store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now(), pending: plans.length ? null : ((await pendingCheckThrottled(id, true)) || null) };
+      } catch (e) {
+        const msg = stripErr(e);
+        store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: msg, busy: false, refreshedAt: Date.now() + touchCooldownFor(id, msg) - REFRESH_CLAIM_COOLDOWN_MS };
+        toast(t("m.refreshClaimAcctErr", { name, err: msg }), "warn");
+        return; // touch 失败无从领取；429 冷却语义已入 refreshedAt
+      }
+      const plan = plans[0];
+      if (!plan) { toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail")); return; }
+      try {
+        await invoke("claim_start", { id, planId: plan.plan_id });
+      } catch (e) {
+        toast(stripErr(e), "err");
+        return;
+      }
       toast(t("m.claimVerify", { name: plan.name || plan.plan_id }), "ok", t("m.claimVerifyDetail"));
       const r = await waitForClaimResult(id);
       if (!r) toast(t("m.claimTimeout"), "warn");
@@ -688,10 +842,13 @@ export const actions = {
       if (r && r.ok === false) {
         autoClaimCooldown[id] = autoClaimCooldownFor(r);
         const waitMin = Math.max(1, Math.round((autoClaimCooldown[id] - Date.now()) / 60000));
-        toast(t("m.claimFailed", { name: r.accountName, code: Number.isFinite(r.code) && r.code >= 0 ? `[${r.code}] ` : "", msg: r.message || t("m.unknownErr") }), "err", t("m.claimCooldownHint", { n: waitMin }));
+        const rawBit = r.serverBody ? t("m.claimServerRaw", { raw: r.serverBody }) : "";
+        toast(
+          t("m.claimFailed", { name: r.accountName, code: Number.isFinite(r.code) && r.code >= 0 ? `[${r.code}] ` : "", msg: r.message || t("m.unknownErr") }),
+          "err",
+          [t("m.claimCooldownHint", { n: waitMin }), rawBit].filter(Boolean).join("\n")
+        );
       }
-    } catch (e) {
-      toast(stripErr(e), "err");
     } finally {
       claimActive = false;
       emit();
@@ -699,12 +856,15 @@ export const actions = {
   },
 
   async claimAll() {
-    const ids = (store.state?.accounts || [])
-      .filter((a) => !skipReason(a))
-      .map((a) => a.id)
-      .filter((id) => (store.claimable[id]?.plans || []).length > 0);
-    if (!ids.length) { toast(t("m.noClaimableAccounts"), "warn"); return; }
+    // 融合「探测→领取」逐号推进：投放签发后约 30s 过期（11-17 实测，探测后 25s
+    // 才轮到的号内部 touch 全部 claim.gone），两段式（先探测完一批再领取）后半段
+    // 注定过期。每个号先 touch 重发投放，拿到就立刻提交，把「签发→提交」压回 5s 内
+    const accounts = (store.state?.accounts || []).filter((a) => !skipReason(a));
+    if (!accounts.length) { toast(t("m.noClaimableAccounts"), "warn"); return; }
     if (claimActive || claimAllRunning || refreshClaim.running) return;
+    if (!(await waitTouchIdle())) { toast(t("m.claimBusy"), "warn"); return; }
+    if (!(await waitClaimIdle())) { toast(t("m.claimBusy"), "warn"); return; }
+    if (claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning || autoTouchRunning) return;
     if (referralSideBusy()) { toast(t("m.captchaBusy"), "warn"); return; }
     claimAllRunning = true;
     claimActive = true;
@@ -713,26 +873,54 @@ export const actions = {
     // 指数退避 15s→30s→60s→封顶 120s，未再命中即清零
     let backoffMs = 0;
     const hit429 = (s) => String(s || "").includes("429");
+    let claimed = 0, noDelivery = 0;
+    const failBits = [];
     try {
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        const plan = store.claimable[id]?.plans?.[0];
-        if (!plan) continue; // 刷新可能在排队期间清空了该账号的 plans
-        const name = store.state.accounts.find((a) => a.id === id)?.name || id;
+      for (let i = 0; i < accounts.length; i++) {
+        const a = accounts[i];
+        const id = a.id;
+        const name = a.name || id;
+        if (i > 0) await new Promise((res) => setTimeout(res, 2600 + Math.random() * 1200 + backoffMs));
+        let plans = [];
+        try {
+          store.claimable[id] = { ...(store.claimable[id] || {}), busy: true };
+          emit();
+          plans = (await invoke("claim_refresh_one", { id })) || [];
+          store.claimable[id] = { plans, err: null, busy: false, refreshedAt: Date.now(), pending: plans.length ? null : ((await pendingCheckThrottled(id)) || null) };
+        } catch (e) {
+          const msg = stripErr(e);
+          store.claimable[id] = { plans: store.claimable[id]?.plans || [], err: msg, busy: false, refreshedAt: Date.now() };
+          if (hit429(msg)) {
+            backoffMs = Math.min(backoffMs ? backoffMs * 2 : 15000, 120000);
+            toast(t("m.claimAllThrottle", { name, n: Math.round(backoffMs / 1000) }), "warn");
+          } else {
+            failBits.push(`${name}: ${msg}`);
+          }
+          continue; // touch 失败的号本轮无从领取，冷却语义由 touch 侧表管
+        }
+        const plan = plans[0];
+        if (!plan) { noDelivery++; continue; }
         let q429 = false;
         try {
           await invoke("claim_start", { id, planId: plan.plan_id });
         } catch (e) {
           // 429 时验证码窗还没开，不补 claim_cancel，直接走退避
           q429 = hit429(stripErr(e));
-          if (!q429) toast(t("m.claimAccountErr", { name, err: stripErr(e) }), "err");
+          if (!q429) failBits.push(`${name}: ${stripErr(e)}`);
         }
         if (!q429) {
           const r = await waitForClaimResult(id, 120000);
           if (!r) {
-            toast(t("m.claimAcctTimeout", { name }), "warn");
+            failBits.push(`${name}: ${t("m.claimAcctTimeout", { name })}`);
             await invoke("claim_cancel").catch(() => {});
-          } else if (r.ok === false && hit429(r.message)) q429 = true;
+          } else if (r.ok === true) {
+            claimed++;
+            await awaitClaimableFresh(id);
+          } else if (hit429(r.message)) {
+            q429 = true;
+          } else {
+            failBits.push(`${name}: [${Number.isFinite(r.code) && r.code >= 0 ? r.code : "?"}] ${r.message || t("m.unknownErr")}`);
+          }
         }
         if (q429) {
           backoffMs = Math.min(backoffMs ? backoffMs * 2 : 15000, 120000);
@@ -740,19 +928,26 @@ export const actions = {
         } else {
           backoffMs = 0;
         }
-        if (i < ids.length - 1) await new Promise((res) => setTimeout(res, 2600 + Math.random() * 1200 + backoffMs));
+        emit();
       }
     } finally {
       claimAllRunning = false;
       claimActive = false;
       emit();
     }
+    toast(
+      t("m.claimAllDone", { n: accounts.length, k: claimed, g: noDelivery }),
+      failBits.length ? "warn" : "ok",
+      failBits.join("\n"),
+    );
   },
 
-  // 单号刷新资格：与批量 refreshClaim 同一后端命令（claim_refresh_one = touch 投放清单，
-  // preview 通道已删），但不占批量冷却；批量/领取流程在跑时拒绝，避免叠加请求撞风控
+  // 单号探测：与批量 refreshClaim 同一后端命令（claim_refresh_one = touch 投放清单，
+  // preview 通道已删），但不占批量冷却；批量/领取/自动 touch 在跑时拒绝，避免叠加请求撞风控
   async refreshClaimOne(id) {
     if (refreshOneBusy || refreshClaim.running || claimActive) { toast(t("m.claimBusy"), "warn"); return; }
+    if (!(await waitTouchIdle())) { toast(t("m.claimBusy"), "warn"); return; }
+    if (refreshOneBusy || refreshClaim.running || claimActive) return;
     if (store.claimable[id]?.busy) return;
     // 与批量同口径：60s 内刷过的号不再重查（叠加请求撞风控）
     if (Date.now() - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS) {
@@ -772,14 +967,19 @@ export const actions = {
       if (plans.length) {
         store.claimable[id].pending = null;
         toast(t("m.refreshClaimOneDone", { name, n: plans.length }), "ok");
+        maybeAutoClaimAfterTouch();
       } else {
-        // 手动单号刷新 = 用户主动要最新状态，强制绕过节流
+        // 手动单号探测 = 用户主动要最新状态，强制绕过节流
         const pending = await pendingCheckThrottled(id, true);
         store.claimable[id].pending = pending || null;
-        // touch 空时顺手拉领取历史（本地文件读取，零上游流量）
-        if (!pending) loadClaimHistory(id);
+        // touch 空时拉领取历史区分两种空：已领取过（touch 不再下发）vs 真没投放
+        await loadClaimHistory(id);
+        const claimedBefore = (store.claimHistory[id]?.history || []).length > 0;
         if (pending) {
           toast(t("m.claimPendingToast", { name, plan: pending.planName }), "ok");
+        } else if (claimedBefore) {
+          // 已领取过：touch 不再下发属正常，别误报「活动已结束」
+          toast(t("m.refreshClaimOneClaimed", { name, n: (store.claimHistory[id]?.history || []).length }), "ok");
         } else {
           toast(t("m.refreshClaimOneEmpty", { name }), "ok", t("m.refreshClaimOneEmptyDetail"));
         }
@@ -804,15 +1004,15 @@ export const actions = {
     // per-id 新近已刷新跳过：60s 内刷过的号（refreshedAt）批量时不再重查
     // ——叠加请求就是领取链 429→3012 的同款场景
     const fresh = (id) => now0 - (store.claimable[id]?.refreshedAt || 0) < REFRESH_CLAIM_COOLDOWN_MS;
-    // 已有可领套餐的号批量时跳过：重查对界面无增益，touch 投放波动返回空 deliveries 时
-    // 整体覆盖写回会把正在展示的可领条顶掉；要验证某个套餐是否还在用单号刷新（真实覆盖）
-    const hasPlans = (id) => (store.claimable[id]?.plans || []).length > 0;
+    // 已有可领套餐的号不再单独跳过：fresh 一层管够——60s 内刷过的（无论结果）一律不重查
+    // （活徽章防波动覆盖、空结果不浪费请求）；领取失败（gone/1002）不写缓存，死 plans 会
+    // 留在缓存里，此前 hasPlans 无条件跳过让死徽章挂满 10 分钟冷却期（点领取必弹 gone），
+    // 过期缓存放行重查即可自愈。要验证某个套餐是否还在用单号刷新（真实覆盖）
     const ids = accounts
       .filter((a) => !skipReason(a))
       .map((a) => a.id)
       .filter((id) => !cooled(id))
-      .filter((id) => !fresh(id))
-      .filter((id) => !hasPlans(id));
+      .filter((id) => !fresh(id));
     const skippedBits = [
       ...accounts.filter((a) => skipReason(a)).map((a) => `${a.name}（${skipReason(a)}）`),
       ...accounts
@@ -821,15 +1021,17 @@ export const actions = {
       ...accounts
         .filter((a) => !skipReason(a) && !cooled(a.id) && fresh(a.id))
         .map((a) => `${a.name}（${t("m.refreshFreshSkip")}）`),
-      ...accounts
-        .filter((a) => !skipReason(a) && !cooled(a.id) && !fresh(a.id) && hasPlans(a.id))
-        .map((a) => `${a.name}（${t("m.skipHasPlans")}）`),
     ];
     if (!ids.length) {
       toast(t("m.claimSkippedAll", { names: skippedBits.join("、") }), "warn");
       return;
     }
     const now = Date.now();
+    if (refreshOneBusy || refreshClaim.running || claimAllRunning || (claimActive && !autoClaimRunning)) {
+      toast(t("m.claimBusy"), "warn");
+      return;
+    }
+    if (!(await waitTouchIdle())) { toast(t("m.claimBusy"), "warn"); return; }
     if (refreshOneBusy || refreshClaim.running || claimAllRunning || (claimActive && !autoClaimRunning)) return;
     if (now < refreshClaim.cooldownUntil) {
       toast(t("btn.refreshClaimCooldownTitle", { n: Math.ceil((refreshClaim.cooldownUntil - now) / 1000) }), "warn");
@@ -838,13 +1040,13 @@ export const actions = {
     refreshClaim = { running: true, done: 0, total: ids.length, cooldownUntil: 0 };
     startRefreshTicker();
     emit();
-    if (autoClaimRunning) {
+    if (autoClaimRunning || autoTouchRunning) {
       autoAbortRequested = true;
       const deadline = Date.now() + AUTO_ABORT_WAIT_MS;
-      while (autoClaimRunning && Date.now() < deadline) {
+      while ((autoClaimRunning || autoTouchRunning) && Date.now() < deadline) {
         await new Promise((res) => setTimeout(res, 300));
       }
-      if (autoClaimRunning) {
+      if (autoClaimRunning || autoTouchRunning) {
         refreshClaim.running = false;
         refreshClaim.cooldownUntil = Date.now() + REFRESH_CLAIM_COOLDOWN_MS;
         toast(t("m.claimBusy"), "warn");
@@ -856,7 +1058,8 @@ export const actions = {
     const failBits = [];
     try {
       let done = 0;
-      await refreshClaimBatch(ids, 800, async (id) => {
+      // 手动探测同样 60s 批间隔，与自动轮一致的错峰密度
+      await refreshClaimBatch(ids, 60_000, async (id) => {
         const name = store.state.accounts.find((a) => a.id === id)?.name || id;
         refreshClaim.done = ++done;
         store.claimable[id] = { plans: store.claimable[id]?.plans || [], busy: true };
@@ -868,6 +1071,9 @@ export const actions = {
           if (plans.length) {
             store.claimable[id].pending = null;
             okCount++;
+            // 融合跟领（自动领取开着时）：60s 批间隔铺完全场要 7-9min，投放置顶 30s
+            // 过期——等批末统一领取时只有最后几个号还活着，必须 touch 到就排队领
+            enqueueAutoClaim(id);
           } else {
             // 批量也补待生效判定：领取后 touch 不再下发，balance 反推「已领取（待生效）」。
             // 批量走节流——没投放的号每轮都打 balance 就是双倍上游请求
@@ -888,6 +1094,7 @@ export const actions = {
       emit();
       setTimeout(stopRefreshTickerIfIdle, 1100);
     }
+    maybeAutoClaimAfterTouch();
     // 每号失败不再逐条弹：聚进汇总 detail；批量跳过的号也列在这里
     toast(
       t("m.refreshClaimDone", { n: ids.length, k: okCount }),
@@ -941,7 +1148,10 @@ export const actions = {
       emit();
       if (store.state.auto_claim) {
         toast(t("m.autoClaimOn"), "ok", t("m.autoClaimOnDetail"));
-        if (Date.now() - (lastAutoRound?.at ?? 0) > REFRESH_CLAIM_COOLDOWN_MS) autoClaimTick();
+        if (Date.now() - (lastAutoRound?.at ?? 0) > REFRESH_CLAIM_COOLDOWN_MS) {
+          // 开启即检测：touch 开着先查一轮填缓存，随后消费（touch 关则直接领缓存）
+          autoTouchTick().then(() => autoClaimTick());
+        }
       } else {
         lastAutoRound = null;
       }
@@ -955,7 +1165,7 @@ export const actions = {
 
 // ---- 运行标志（供渲染层读取） ----
 export function runtimeFlags() {
-  return { claimAllRunning, refreshClaim, claimActive, autoClaimRunning };
+  return { claimAllRunning, refreshClaim, claimActive, autoClaimRunning, autoTouchRunning };
 }
 
 // ---- Tauri 事件接线（boot 时挂一次） ----
@@ -977,7 +1187,8 @@ export function wireEvents() {
       if (p.nextAt) {
         msg += t("m.claimNextAt", { time: new Date(p.nextAt).toLocaleString(localeTag(), { hour12: false }) });
       }
-      toast(t("m.claimFailed", { name: p.accountName, code: codeBit, msg }), "err");
+      const rawBit = p.serverBody ? t("m.claimServerRaw", { raw: p.serverBody }) : "";
+      toast(t("m.claimFailed", { name: p.accountName, code: codeBit, msg }), "err", rawBit);
     } else {
       const bits = [];
       const now = p.serverTime || Date.now();
@@ -1083,8 +1294,9 @@ export async function boot() {
     }, 5000);
     setInterval(sweepTick, TICK_MS);
     setTimeout(silentUpdateCheck, BOOT_UPDATE_CHECK_MS);
-    setTimeout(autoClaimTick, AUTO_CLAIM_FIRST_DELAY_MS);
-    setInterval(autoClaimTick, AUTO_CLAIM_INTERVAL_MS);
+    // 错相启动：touch 首跳 2min；claim 首跳 7min（+半周期），稳态相位差恒 5min
+    scheduleTouch(AUTO_CLAIM_FIRST_DELAY_MS);
+    scheduleClaim(AUTO_CLAIM_FIRST_DELAY_MS + AUTO_CLAIM_INTERVAL_MS / 2);
   } catch (e) {
     store.bootError = stripErr(e);
     emit();

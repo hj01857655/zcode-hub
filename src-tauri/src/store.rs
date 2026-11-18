@@ -180,6 +180,10 @@ pub struct Settings {
     pub language: Option<String>,
     #[serde(default)]
     pub auto_claim: Option<bool>,
+    /// 自动 touch（投放查询轮询）：与 auto_claim 拆分的独立开关。
+    /// 未设置时回落 auto_claim——老配置（只有 auto_claim）行为完全不变
+    #[serde(default)]
+    pub auto_touch: Option<bool>,
     /// 用户拖拽后的账号显示顺序（id 列表）；未列出的账号按默认规则排在尾部
     #[serde(default)]
     pub account_order: Option<Vec<String>>,
@@ -190,6 +194,7 @@ impl Settings {
     pub fn close_to_tray(&self) -> bool { self.close_to_tray.unwrap_or(true) }
     pub fn hot_switch(&self) -> bool { self.hot_switch.unwrap_or(false) }
     pub fn auto_claim(&self) -> bool { self.auto_claim.unwrap_or(false) }
+    pub fn auto_touch(&self) -> bool { self.auto_touch.or(self.auto_claim).unwrap_or(false) }
     pub fn auth_proxy(&self) -> Option<&str> {
         if self.auth_proxy_on.unwrap_or(false) {
             self.auth_proxy_url.as_deref().map(str::trim).filter(|s| !s.is_empty())
@@ -228,6 +233,7 @@ pub struct AppState {
     pub close_to_tray: bool,
     pub hot_switch: bool,
     pub auto_claim: bool,
+    pub auto_touch: bool,
     pub auth_proxy_on: bool,
     pub auth_proxy_url: Option<String>,
     pub language: String,
@@ -1734,6 +1740,7 @@ pub fn get_state(paths: &Paths) -> Result<AppState, String> {
         close_to_tray: settings.close_to_tray(),
         hot_switch: settings.hot_switch(),
         auto_claim: settings.auto_claim(),
+        auto_touch: settings.auto_touch(),
         auth_proxy_on: settings.auth_proxy_on.unwrap_or(false),
         auth_proxy_url: settings.auth_proxy_url.clone(),
         language: crate::i18n::current().as_str().to_string(),
@@ -1877,5 +1884,24 @@ mod tests {
         apply_account_order(&paths, &mut v);
         assert_eq!(v[0].id, "a");
         let _ = fs::remove_dir_all(&paths.home);
+    }
+
+    #[test]
+    fn auto_touch_falls_back_to_auto_claim_when_unset() {
+        // 未设置 auto_touch：回落 auto_claim（老配置行为不变）
+        let s = Settings { auto_claim: Some(true), auto_touch: None, ..Default::default() };
+        assert!(s.auto_touch());
+        let s = Settings { auto_claim: Some(false), auto_touch: None, ..Default::default() };
+        assert!(!s.auto_touch());
+        // 显式设置后独立生效：关领取只查投放 / 只领取不查投放
+        let s = Settings { auto_claim: Some(false), auto_touch: Some(true), ..Default::default() };
+        assert!(s.auto_touch());
+        let s = Settings { auto_claim: Some(true), auto_touch: Some(false), ..Default::default() };
+        assert!(!s.auto_touch());
+        assert!(s.auto_claim());
+        // 全空默认：都关
+        let s = Settings::default();
+        assert!(!s.auto_touch());
+        assert!(!s.auto_claim());
     }
 }

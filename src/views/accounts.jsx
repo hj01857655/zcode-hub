@@ -19,7 +19,7 @@ function useStore() {
 }
 
 function Toolbar({ s, claimableCount, unsaved }) {
-  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
+  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning, autoTouchRunning } = runtimeFlags();
   const cooling = Date.now() < refreshClaim.cooldownUntil;
   return (
     <section className="toolbar">
@@ -37,7 +37,7 @@ function Toolbar({ s, claimableCount, unsaved }) {
         <button
           className="btn-ghost has-ic claim-all"
           onClick={() => actions.claimAll()}
-          disabled={claimAllRunning || refreshClaim.running || autoClaimRunning}
+          disabled={claimAllRunning || refreshClaim.running || autoClaimRunning || autoTouchRunning}
           title={t("btn.claimAllTitle")}
         >
           <Ic name="gift" size={16} /> {t("btn.claimAll")}
@@ -49,10 +49,10 @@ function Toolbar({ s, claimableCount, unsaved }) {
         <button
           className="btn-ghost has-ic"
           onClick={() => actions.refreshClaim()}
-          disabled={refreshClaim.running || claimAllRunning || cooling}
+          disabled={refreshClaim.running || claimAllRunning || cooling || autoTouchRunning || autoClaimRunning}
           title={cooling && !refreshClaim.running
             ? t("btn.refreshClaimCooldownTitle", { n: Math.ceil((refreshClaim.cooldownUntil - Date.now()) / 1000) })
-            : t("btn.refreshClaimTitle")}
+            : (autoTouchRunning || autoClaimRunning) ? t("m.claimBusy") : t("btn.refreshClaimTitle")}
         >
           <Ic name="refresh" size={16} />{" "}
           {refreshClaim.running
@@ -62,7 +62,7 @@ function Toolbar({ s, claimableCount, unsaved }) {
       ) : null}
 
       <button
-        className={"tog-inline" + (s.auto_claim ? " on" : "") + (autoClaimRunning ? " running" : "")}
+        className={"tog-inline" + (s.auto_claim ? " on" : "") + (autoClaimRunning || autoTouchRunning ? " running" : "")}
         role="switch"
         aria-checked={s.auto_claim}
         aria-label={t("btn.autoClaim")}
@@ -186,6 +186,15 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
             <Ic name="gauge" size={16} />
           </button>
           <button
+            className="icon-btn"
+            title={t("btn.claimOne")}
+            aria-label={t("btn.claimOne")}
+            onClick={() => actions.claim(a.id)}
+            disabled={claimDisabled}
+          >
+            <Ic name="bolt" size={16} />
+          </button>
+          <button
             className={"icon-btn" + (store.claimable[a.id]?.busy ? " on" : "")}
             title={t("btn.refreshClaimOne")}
             aria-label={t("btn.refreshClaimOne")}
@@ -257,8 +266,8 @@ export default function AccountsPage({ focusAcc, onFocusDone }) {
   const st = s.state;
   const active = st.accounts.find((a) => a.is_active) || null;
   const claimableCount = st.accounts.filter((a) => (s.claimable[a.id]?.plans || []).length > 0).length;
-  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
-  const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning;
+  const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning, autoTouchRunning } = runtimeFlags();
+  const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning || autoTouchRunning;
 
   const accQ = accQuery.trim().toLowerCase();
   // 状态筛选谓词（与文本搜索叠加）：可领 / 待生效 / 需重登（含 JWT 过期）
