@@ -66,3 +66,9 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["st
 [profile.release]
 strip = "symbols"
 lto = "thin"
+
+# 本机环境问题绕行：debug 档 cc-rs 会给 C 编译传 -Z7，cl 14.44.35207 在 build-script
+# 进程上下文里写嵌入调试信息必报 D8050（诊断结论：与代码无关，pwsh/python 直调同 argv 全绿）。
+# dev 关调试信息后 ring 的 build.rs 走 is_debug=false，不再传 -Z7；回滚=删除本段。
+[profile.dev]
+debug = false
